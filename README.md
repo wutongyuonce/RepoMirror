@@ -1,5 +1,7 @@
 # RepoMirror
 
+[中文文档](README.zh-CN.md)
+
 RepoMirror is a focused macOS desktop app for mirroring a GitHub repository, or one directory inside it, into a local folder tree. It is built with Tauri 2, React, TypeScript, and a small Rust backend.
 
 ## Features
@@ -19,6 +21,14 @@ RepoMirror uses the Mac's existing `git` executable and credentials. Private rep
 Synchronizing never starts without a preview and confirmation. Mirror mode may remove files from a destination when they do not exist in the source; disabling mirror mode preserves local extra files.
 
 `.git`, `.DS_Store`, and `node_modules` are never changed by synchronization. Deleting a folder group removes its sync configuration and child sync configurations only; it never deletes local destination files.
+
+### How synchronization works
+
+RepoMirror retrieves the newest commit from each configured GitHub source, then compares the source directory with that item's final destination directory. It writes only files that are new or different and leaves identical files untouched. A new GitHub commit therefore does not necessarily change local files: a commit outside the configured repository directory has no effect on that item.
+
+`Sync all` runs every configured item, including items nested in folder groups. It does not treat the default root directory as one large destination, so unrelated files and folders at the root are preserved. Each item is handled independently at `<rootDirectory>/<folderGroup>/<destinationName>`.
+
+With `mirror: true`, source files replace same-named local files and local files absent from the source are removed, but only inside that item's final destination directory. With `mirror: false`, files absent from the source are retained; changed source files are still updated.
 
 ## Configuration
 
@@ -72,6 +82,15 @@ Create a macOS bundle with:
 ```bash
 pnpm tauri build
 ```
+
+The command first runs the production frontend build and then produces a release macOS application bundle and disk image. The usual output locations are:
+
+```text
+src-tauri/target/release/bundle/macos/RepoMirror.app
+src-tauri/target/release/bundle/dmg/RepoMirror_0.1.0_<architecture>.dmg
+```
+
+On an Apple Silicon Mac, `<architecture>` is `aarch64`; on an Intel Mac, it is `x64`. The `.app` bundle can run directly, while the `.dmg` is the convenient distribution installer: open it and drag `RepoMirror.app` into Applications. Builds are not code-signed or notarized by this repository, so macOS may require an explicit first-run approval when distributing the app outside the development machine.
 
 ## Project Layout
 

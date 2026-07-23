@@ -6,6 +6,10 @@ RepoMirror is a focused macOS desktop app for mirroring a GitHub repository, or 
 
 It is especially useful for people building a local library of AI agent skills, prompts, extensions, and open-source tools: keep the folders you actually use on disk, group them however you like, and stop manually checking dozens of GitHub projects for updates.
 
+![image-20260724031247720](img/image-20260724031247720.png)
+
+![image-20260724031258403](img/image-20260724031258403.png)
+
 ## Features
 
 - One user-selected default root directory.

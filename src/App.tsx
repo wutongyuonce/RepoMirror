@@ -87,6 +87,7 @@ function Status({ item }: { item: SyncItem }) {
 }
 
 type Dialog = "group" | "sources" | "preview" | "settings" | "delete-group" | "confirm-import" | null;
+type SyncOperation = { kind: "preview" | "sync"; current: number; total: number; itemName?: string };
 
 type FolderNode = { path: string; label: string; children: FolderNode[] };
 
@@ -116,8 +117,9 @@ export default function App() {
   const [dialog, setDialog] = useState<Dialog>(null);
   const [activeGroup, setActiveGroup] = useState("");
   const [selectedId, setSelectedId] = useState<string>();
-  const [busy, setBusy] = useState<string>();
+  const [operation, setOperation] = useState<SyncOperation>();
   const [error, setError] = useState<string>();
+  const [notice, setNotice] = useState<string>();
   const [previews, setPreviews] = useState<Array<{ item: SyncItem; preview: SyncPreview }>>([]);
   const [groupPath, setGroupPath] = useState("");
   const [sourceUrls, setSourceUrls] = useState("");
@@ -137,6 +139,12 @@ export default function App() {
     return () => window.clearTimeout(timeout);
   }, [error]);
 
+  useEffect(() => {
+    if (!notice) return;
+    const timeout = window.setTimeout(() => setNotice(undefined), NOTIFICATION_TIMEOUT_MS);
+    return () => window.clearTimeout(timeout);
+  }, [notice]);
+
   const persist = async (next: AppConfig) => {
     setConfig(next);
     try {
@@ -151,6 +159,8 @@ export default function App() {
   const groups = useMemo(() => ["", ...groupPaths.sort((left, right) => left.localeCompare(right, "zh-Hans-CN"))], [groupPaths]);
   const theme = config.theme ?? "light";
   const selectedItem = config.items.find((item) => item.id === selectedId);
+  const previewChangeCount = previews.reduce((total, { preview }) => total + preview.changes.length, 0);
+  const previewItemCount = previews.filter(({ preview }) => preview.changes.length > 0).length;
   const groupedItems = activeGroup ? config.items.filter((item) => item.folderGroup === activeGroup || item.folderGroup.startsWith(`${activeGroup}/`)) : config.items.filter((item) => item.folderGroup === "");
   const affectedGroupItems = activeGroup ? config.items.filter((item) => item.folderGroup === activeGroup || item.folderGroup.startsWith(`${activeGroup}/`)) : [];
 
@@ -267,26 +277,36 @@ export default function App() {
 
   const previewItems = async (items: SyncItem[]) => {
     if (!config.rootDirectory) return setError("请先选择默认根目录。");
-    setBusy("preview");
+    setOperation({ kind: "preview", current: 0, total: items.length });
     try {
       const results: Array<{ item: SyncItem; preview: SyncPreview }> = [];
-      for (const item of items) results.push({ item, preview: await api.preview(item, config.rootDirectory) });
+      for (const [index, item] of items.entries()) {
+        setOperation({ kind: "preview", current: index + 1, total: items.length, itemName: item.destinationName });
+        results.push({ item, preview: await api.preview(item, config.rootDirectory) });
+      }
       setPreviews(results);
       setDialog("preview");
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "无法生成预览。");
     } finally {
-      setBusy(undefined);
+      setOperation(undefined);
     }
   };
 
   const confirmSync = async () => {
     if (!config.rootDirectory) return;
-    setBusy("sync");
+    const changedPreviews = previews.filter(({ preview }) => preview.changes.length > 0);
+    if (!changedPreviews.length) {
+      setDialog(null);
+      setPreviews([]);
+      return;
+    }
+    setOperation({ kind: "sync", current: 0, total: changedPreviews.length });
     try {
       let next = config;
       const failures: string[] = [];
-      for (const { item } of previews) {
+      for (const [index, { item }] of changedPreviews.entries()) {
+        setOperation({ kind: "sync", current: index + 1, total: changedPreviews.length, itemName: item.destinationName });
         try {
           const updated = await api.sync(item, config.rootDirectory);
           next = { ...next, items: next.items.map((current) => current.id === updated.id ? updated : current) };
@@ -304,10 +324,11 @@ export default function App() {
       setDialog(null);
       setPreviews([]);
       if (failures.length) setError(failures.join("\n"));
+      else setNotice(`已完成 ${changedPreviews.length} 项同步。`);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "同步失败。");
     } finally {
-      setBusy(undefined);
+      setOperation(undefined);
     }
   };
 
@@ -340,11 +361,11 @@ export default function App() {
             {activeGroup ? <button className="icon-button danger" onClick={() => { setGroupDeleteConfirmed(false); setDialog("delete-group"); }} title="删除此文件夹组及其同步项"><Trash2 size={16} /></button> : null}
             <button className="button secondary" onClick={() => setDialog("group")}><FolderPlus size={16} />文件夹组</button>
             <button className="button secondary" onClick={() => setDialog("sources")}><Plus size={16} />添加来源</button>
-            <button className="button primary" disabled={!config.items.length || !!busy} onClick={() => previewItems(config.items)}><RefreshCw size={16} className={busy === "preview" ? "spin" : ""} />同步全部</button>
+            <button className="button primary" disabled={!config.items.length || !!operation} onClick={() => previewItems(config.items)}>{operation?.kind === "preview" ? <LoaderCircle size={16} className="spin" /> : <RefreshCw size={16} />}同步全部</button>
           </div>
         </header>
 
-        <div className="list-head"><span>来源与目标</span><span>状态</span><span>最近同步</span><span /></div>
+        <div className="list-head"><span>来源与目标</span><span>上次同步结果</span><span>最近同步</span><span /></div>
         <div className="item-list">
           {!loaded ? <div className="empty-state"><LoaderCircle className="spin" size={20} />正在载入配置</div> : null}
           {loaded && groupedItems.length === 0 ? <div className="empty-state"><Folder size={24} /><strong>这里还没有同步项</strong><span>添加 GitHub 仓库或项目内目录，它会同步到这个位置。</span><button className="button secondary" onClick={() => setDialog("sources")}><Plus size={16} />添加来源</button></div> : null}
@@ -363,7 +384,7 @@ export default function App() {
         <label>GitHub 来源<span className="readonly-input">{selectedItem.sourceUrl}</span></label>
         <label>最终文件夹名称<input value={selectedItem.destinationName} onChange={(event) => editSelected({ destinationName: event.target.value.trim() })} /></label>
         <label className="switch-row"><span><strong>镜像同步</strong><small>删除来源中不存在的目标文件</small></span><input type="checkbox" checked={selectedItem.mirror} onChange={(event) => editSelected({ mirror: event.target.checked })} /></label>
-        <div className="detail-actions"><button className="button primary" disabled={!!busy} onClick={() => previewItems([selectedItem])}><RefreshCw size={16} />预览并同步</button><button className="icon-button danger" onClick={() => removeItem(selectedItem.id)} title="移除同步项"><Trash2 size={16} /></button></div>
+        <div className="detail-actions"><button className="button primary" disabled={!!operation} onClick={() => previewItems([selectedItem])}>{operation?.kind === "preview" ? <LoaderCircle size={16} className="spin" /> : <RefreshCw size={16} />}预览并同步</button><button className="icon-button danger" onClick={() => removeItem(selectedItem.id)} title="移除同步项"><Trash2 size={16} /></button></div>
       </aside> : null}
 
       {dialog === "group" ? <Modal title="添加文件夹组" close={() => setDialog(null)}>
@@ -401,13 +422,15 @@ export default function App() {
       </Modal> : null}
 
       {dialog === "preview" ? <Modal title="同步预览" close={() => setDialog(null)} wide>
-        <p>以下变更将在确认后写入本地。此次预览来自 {previews.length} 个同步项。</p>
-        <div className="preview-list">{previews.flatMap(({ item, preview }) => preview.changes.map((change) => <div key={`${item.id}-${change.kind}-${change.path}`}><span className={`change change-${change.kind}`}>{change.kind === "add" ? "新增" : change.kind === "modify" ? "修改" : "删除"}</span><code>{destination(item)}/{change.path}</code></div>))}</div>
+        <p>{previewChangeCount ? `发现 ${previewChangeCount} 个文件变更，涉及 ${previewItemCount} / ${previews.length} 个同步项。确认后只会同步有变更的项目。` : `已检查 ${previews.length} 个同步项，来源与本地目标目录完全一致。`}</p>
+        {previewChangeCount ? <div className="preview-list">{previews.flatMap(({ item, preview }) => preview.changes.map((change) => <div key={`${item.id}-${change.kind}-${change.path}`}><span className={`change change-${change.kind}`}>{change.kind === "add" ? "新增" : change.kind === "modify" ? "修改" : "删除"}</span><code>{destination(item)}/{change.path}</code></div>))}</div> : <div className="preview-empty"><CircleCheck size={18} /><span>无需同步</span></div>}
         <div className="preview-commits">{previews.map(({ item, preview }) => <span key={item.id}>{item.destinationName} · {preview.commit.slice(0, 8)}</span>)}</div>
-        <ModalActions close={() => setDialog(null)} submit={confirmSync} label={busy === "sync" ? "正在同步" : "确认同步"} disabled={busy === "sync"} />
+        {previewChangeCount ? <ModalActions close={() => setDialog(null)} submit={confirmSync} label={operation?.kind === "sync" ? "正在同步" : `确认同步 ${previewItemCount} 项`} disabled={operation?.kind === "sync"} loading={operation?.kind === "sync"} /> : <div className="modal-actions"><button className="button secondary" onClick={() => setDialog(null)}><Check size={16} />关闭</button></div>}
       </Modal> : null}
 
       {error ? <div className="toast"><CircleAlert size={17} /><span>{error}</span><button className="icon-button" onClick={() => setError(undefined)} title="关闭提示"><X size={15} /></button></div> : null}
+      {notice ? <div className="toast success"><CircleCheck size={17} /><span>{notice}</span><button className="icon-button" onClick={() => setNotice(undefined)} title="关闭提示"><X size={15} /></button></div> : null}
+      {operation ? <ProgressDialog operation={operation} /> : null}
     </main>
   );
 }
@@ -431,6 +454,19 @@ function FolderTree({ nodes, activeGroup, expandedGroups, onSelect, onToggle, it
   })}</>;
 }
 
-function ModalActions({ close, submit, label, disabled = false, destructive = false }: { close: () => void; submit: () => void; label: string; disabled?: boolean; destructive?: boolean }) {
-  return <div className="modal-actions"><button className="button ghost" onClick={close}>取消</button><button className={`button ${destructive ? "destructive" : "primary"}`} disabled={disabled} onClick={submit}><Check size={16} />{label}</button></div>;
+function ModalActions({ close, submit, label, disabled = false, destructive = false, loading = false }: { close: () => void; submit: () => void; label: string; disabled?: boolean; destructive?: boolean; loading?: boolean }) {
+  return <div className="modal-actions"><button className="button ghost" onClick={close}>取消</button><button className={`button ${destructive ? "destructive" : "primary"}`} disabled={disabled} onClick={submit}>{loading ? <LoaderCircle size={16} className="spin" /> : <Check size={16} />}{label}</button></div>;
+}
+
+function ProgressDialog({ operation }: { operation: SyncOperation }) {
+  const isPreview = operation.kind === "preview";
+  const detail = operation.current
+    ? `${isPreview ? "正在检查" : "正在同步"} ${operation.current} / ${operation.total} 个同步项`
+    : `正在准备 ${operation.total} 个同步项`;
+  return <div className="modal-backdrop progress-backdrop" role="alertdialog" aria-modal="true" aria-label={isPreview ? "正在生成同步预览" : "正在同步文件"}>
+    <section className="progress-dialog">
+      <LoaderCircle size={24} className="spin" />
+      <div><strong>{isPreview ? "正在生成同步预览" : "正在同步文件"}</strong><span>{detail}</span>{operation.itemName ? <small>{operation.itemName}</small> : null}</div>
+    </section>
+  </div>;
 }

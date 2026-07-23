@@ -4,6 +4,8 @@
 
 RepoMirror is a focused macOS desktop app for mirroring a GitHub repository, or one directory inside it, into a local folder tree. It is built with Tauri 2, React, TypeScript, and a small Rust backend.
 
+It is especially useful for people building a local library of AI agent skills, prompts, extensions, and open-source tools: keep the folders you actually use on disk, group them however you like, and stop manually checking dozens of GitHub projects for updates.
+
 ## Features
 
 - One user-selected default root directory.
@@ -25,6 +27,8 @@ Synchronizing never starts without a preview and confirmation. Mirror mode may r
 ### How synchronization works
 
 RepoMirror retrieves the newest commit from each configured GitHub source, then compares the source directory with that item's final destination directory. It writes only files that are new or different and leaves identical files untouched. A new GitHub commit therefore does not necessarily change local files: a commit outside the configured repository directory has no effect on that item.
+
+The list's `Up to date` and `Updated` labels describe the result of that item's most recent completed synchronization; they are not a background live check of GitHub. Run a preview to fetch the source again and determine the current file-level differences. An empty preview means no synchronization is needed, and RepoMirror does not offer a confirmation action in that case.
 
 `Sync all` runs every configured item, including items nested in folder groups. It does not treat the default root directory as one large destination, so unrelated files and folders at the root are preserved. Each item is handled independently at `<rootDirectory>/<folderGroup>/<destinationName>`.
 
@@ -60,6 +64,23 @@ RepoMirror stores its working configuration in the macOS application-support dir
 ```
 
 Imports reject malformed JSON, unsupported schema versions, unknown fields, invalid paths, invalid enum values, duplicate IDs or destinations, and GitHub fields that do not agree with each other. A failed import does not alter the current configuration. When configuration already exists, RepoMirror requires an explicit overwrite confirmation before replacing it. See [docs/config-format.md](docs/config-format.md) and [docs/config-schema.json](docs/config-schema.json) for the full contract.
+
+### Configuration Skill for Codex
+
+This repository includes [`repo-mirror-config-skill/`](repo-mirror-config-skill), a Codex skill for creating, explaining, reviewing, and repairing RepoMirror import JSON. It converts GitHub repository or directory links into valid Sync Items, asks only for missing essentials, and checks the schema before returning a result.
+
+Install it into your local Codex skills directory, then start a new Codex task:
+
+```bash
+mkdir -p "${CODEX_HOME:-$HOME/.codex}/skills/repo-mirror-config"
+cp -R repo-mirror-config-skill/. "${CODEX_HOME:-$HOME/.codex}/skills/repo-mirror-config/"
+```
+
+Then ask Codex something like:
+
+> Use `repo-mirror-config` to create an importable RepoMirror JSON. My root directory is `/Users/me/Extensions`; put these links under `community/tools`: `https://github.com/owner/repo` and `https://github.com/owner/repo/tree/main/packages/plugin`.
+
+The skill also works for validating an existing export or repairing a JSON file rejected by RepoMirror. `mirror: true` remains a deliberate choice: after preview confirmation, it may remove destination files that are absent from the source.
 
 ## Development
 

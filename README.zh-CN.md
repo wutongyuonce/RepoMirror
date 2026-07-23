@@ -4,6 +4,8 @@
 
 RepoMirror 是一款专注于将 GitHub 仓库或其中指定目录镜像同步至本地文件夹树的 macOS 桌面应用。它基于 Tauri 2、React、TypeScript 与精简的 Rust 后端构建。
 
+它特别适合正在本地积累 AI Agent Skills、提示词、扩展与开源工具的人：把真正会使用的项目保留在磁盘上，按自己的方式归组，不必再手动逐个检查几十个 GitHub 项目有没有更新。
+
 ## 功能
 
 - 选择一个默认根目录。
@@ -25,6 +27,8 @@ RepoMirror 使用 Mac 上已有的 `git` 可执行文件与凭据。只要 Git �
 ### 同步逻辑
 
 RepoMirror 会获取每个已配置 GitHub 来源的最新提交，然后比较来源目录与该条目的最终目标目录。它只会写入新增或内容不同的文件，完全相同的文件不会被改动。因此，GitHub 有新提交并不一定会改变本地文件：若提交未影响已配置的仓库目录，该条目不会发生实际文件变更。
+
+列表中的“已是最新”和“已更新”表示该条目上一次完成同步的结果，不是后台实时检查 GitHub 的状态。运行预览会重新获取来源，并判断当前的文件级差异。预览为空表示无需同步，此时 RepoMirror 不会提供确认同步操作。
 
 `Sync all` 会执行所有已配置条目，包括文件夹组内的条目。它不会把默认根目录当成一个整体目标目录同步，因此根目录中无关的文件和文件夹会被保留。每个条目都独立处理，最终路径为 `<rootDirectory>/<folderGroup>/<destinationName>`。
 
@@ -60,6 +64,23 @@ RepoMirror 将工作配置保存在 macOS 的应用支持目录中。导出的�
 ```
 
 导入会拒绝格式错误的 JSON、不支持的 schema 版本、未知字段、无效路径、无效枚举值、重复的 ID 或目标路径，以及彼此不一致的 GitHub 字段。导入失败不会更改当前配置。已有配置时，RepoMirror 会要求明确确认覆盖后才会替换。完整合约请参阅 [docs/config-format.zh-CN.md](docs/config-format.zh-CN.md) 与 [docs/config-schema.json](docs/config-schema.json)。
+
+### Codex 配置辅助 Skill
+
+本仓库包含 [`repo-mirror-config-skill/`](repo-mirror-config-skill)，这是一个用于创建、解释、审阅和修复 RepoMirror 导入 JSON 的 Codex Skill。它会将 GitHub 仓库或目录链接转换为合法的同步条目，只询问缺失的必要信息，并在返回结果前检查 JSON 规范。
+
+将它安装到本机 Codex skills 目录后，新建一个 Codex task：
+
+```bash
+mkdir -p "${CODEX_HOME:-$HOME/.codex}/skills/repo-mirror-config"
+cp -R repo-mirror-config-skill/. "${CODEX_HOME:-$HOME/.codex}/skills/repo-mirror-config/"
+```
+
+之后可以这样向 Codex 提需求：
+
+> 使用 `repo-mirror-config` 生成一份可导入的 RepoMirror JSON。我的根目录是 `/Users/me/Extensions`；请把这些链接放到 `community/tools` 下：`https://github.com/owner/repo` 和 `https://github.com/owner/repo/tree/main/packages/plugin`。
+
+该 Skill 也可用于验证已有导出文件，或修复被 RepoMirror 拒绝导入的 JSON。`mirror: true` 仍需审慎选择：确认预览后，它可能删除目标目录中来源不存在的文件。
 
 ## 开发
 

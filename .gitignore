@@ -1,0 +1,13 @@
+# JavaScript build outputs
+node_modules/
+dist/
+
+# Rust and Tauri generated outputs
+src-tauri/target/
+src-tauri/gen/
+
+# Local tools and operating system metadata
+.DS_Store
+.idea/
+.vscode/
+*.swp

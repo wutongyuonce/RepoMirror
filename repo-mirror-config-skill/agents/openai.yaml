@@ -1,0 +1,4 @@
+interface:
+  display_name: "RepoMirror Config"
+  short_description: "Create valid RepoMirror configuration JSON"
+  default_prompt: "Use $repo-mirror-config to create a valid RepoMirror configuration JSON from my GitHub sources."

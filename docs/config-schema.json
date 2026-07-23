@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "RepoMirror Configuration",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "folderGroups", "items"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "rootDirectory": { "type": "string" },
+    "theme": { "enum": ["light", "dark"] },
+    "folderGroups": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
+    "items": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "sourceUrl", "repoUrl", "branch", "sourcePath", "folderGroup", "destinationName", "mirror", "lastStatus", "lastSyncedAt", "lastCommit", "lastMessage"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "sourceUrl": { "type": "string", "format": "uri" },
+          "repoUrl": { "type": "string", "format": "uri" },
+          "branch": { "type": ["string", "null"] },
+          "sourcePath": { "type": ["string", "null"] },
+          "folderGroup": { "type": "string" },
+          "destinationName": { "type": "string", "minLength": 1 },
+          "mirror": { "type": "boolean" },
+          "lastStatus": { "enum": ["not_synced", "up_to_date", "updated", "failed"] },
+          "lastSyncedAt": { "type": ["string", "null"], "format": "date-time" },
+          "lastCommit": { "type": ["string", "null"] },
+          "lastMessage": { "type": ["string", "null"] }
+        }
+      }
+    }
+  }
+}

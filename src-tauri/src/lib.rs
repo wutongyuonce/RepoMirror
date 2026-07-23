@@ -14,7 +14,7 @@ use tempfile::TempDir;
 use url::Url;
 use walkdir::WalkDir;
 
-const CONFIG_SCHEMA_VERSION: u8 = 1;
+const CONFIG_SCHEMA_VERSION: u8 = 2;
 
 fn default_schema_version() -> u8 {
     CONFIG_SCHEMA_VERSION
@@ -71,8 +71,7 @@ enum Theme {
 #[serde(rename_all = "snake_case")]
 enum SyncStatus {
     NotSynced,
-    UpToDate,
-    Updated,
+    Synced,
     Failed,
 }
 
@@ -139,7 +138,7 @@ fn import_config() -> Result<Option<AppConfig>, String> {
     let file = fs::File::open(&path).map_err(|error| format!("无法读取导入文件：{error}"))?;
     let value: serde_json::Value = serde_json::from_reader(file).map_err(|error| format!("导入文件不是有效 JSON：{error}"))?;
     if value.get("schemaVersion").and_then(serde_json::Value::as_u64) != Some(CONFIG_SCHEMA_VERSION.into()) {
-        return Err("导入文件必须包含 schemaVersion: 1。".to_owned());
+        return Err("导入文件必须包含 schemaVersion: 2。".to_owned());
     }
     let config: AppConfig = serde_json::from_value(value).map_err(|error| format!("导入文件不符合 RepoMirror 配置格式：{error}"))?;
     validate_config(&config)?;
@@ -162,27 +161,34 @@ fn export_config(config: AppConfig) -> Result<bool, String> {
 }
 
 #[tauri::command]
-fn preview_sync(item: SyncItem, root_directory: String) -> Result<SyncPreview, String> {
-    let prepared = prepare_source(&item)?;
-    let destination = destination_path(&root_directory, &item)?;
-    Ok(SyncPreview {
-        commit: prepared.commit,
-        changes: compare_trees(&prepared.source, &destination, item.mirror)?,
+async fn preview_sync(item: SyncItem, root_directory: String) -> Result<SyncPreview, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let prepared = prepare_source(&item)?;
+        let destination = destination_path(&root_directory, &item)?;
+        Ok(SyncPreview {
+            commit: prepared.commit,
+            changes: compare_trees(&prepared.source, &destination, item.mirror)?,
+        })
     })
+    .await
+    .map_err(|error| format!("同步预览任务意外中断：{error}"))?
 }
 
 #[tauri::command]
-fn sync_item(mut item: SyncItem, root_directory: String) -> Result<SyncItem, String> {
-    let prepared = prepare_source(&item)?;
-    let destination = destination_path(&root_directory, &item)?;
-    let changes = compare_trees(&prepared.source, &destination, item.mirror)?;
-
-    apply_sync(&prepared.source, &destination, item.mirror)?;
-    item.last_status = if changes.is_empty() { SyncStatus::UpToDate } else { SyncStatus::Updated };
-    item.last_synced_at = Some(Utc::now().to_rfc3339());
-    item.last_commit = Some(prepared.commit);
-    item.last_message = None;
-    Ok(item)
+async fn sync_item(item: SyncItem, root_directory: String) -> Result<SyncItem, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let prepared = prepare_source(&item)?;
+        let destination = destination_path(&root_directory, &item)?;
+        let mut updated = item;
+        apply_sync(&prepared.source, &destination, updated.mirror)?;
+        updated.last_status = SyncStatus::Synced;
+        updated.last_synced_at = Some(Utc::now().to_rfc3339());
+        updated.last_commit = Some(prepared.commit);
+        updated.last_message = None;
+        Ok(updated)
+    })
+    .await
+    .map_err(|error| format!("同步任务意外中断：{error}"))?
 }
 
 fn config_path(app: &AppHandle) -> Result<PathBuf, String> {
@@ -523,7 +529,14 @@ mod tests {
 
     #[test]
     fn rejects_unknown_configuration_fields() {
-        let json = r#"{"schemaVersion":1,"folderGroups":[],"items":[],"unexpected":true}"#;
+        let json = r#"{"schemaVersion":2,"folderGroups":[],"items":[],"unexpected":true}"#;
         assert!(serde_json::from_str::<AppConfig>(json).is_err());
+    }
+
+    #[test]
+    fn accepts_only_current_sync_statuses() {
+        assert!(serde_json::from_str::<SyncStatus>(r#""synced""#).is_ok());
+        assert!(serde_json::from_str::<SyncStatus>(r#""updated""#).is_err());
+        assert!(serde_json::from_str::<SyncStatus>(r#""up_to_date""#).is_err());
     }
 }

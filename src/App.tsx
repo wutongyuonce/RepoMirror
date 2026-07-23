@@ -21,10 +21,11 @@ import {
   X,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import { flushSync } from "react-dom";
 import { api } from "./api";
 import type { AppConfig, SyncItem, SyncPreview } from "./domain";
 
-const EMPTY_CONFIG: AppConfig = { schemaVersion: 1, folderGroups: [], items: [] };
+const EMPTY_CONFIG: AppConfig = { schemaVersion: 2, folderGroups: [], items: [] };
 const NOTIFICATION_TIMEOUT_MS = 5_000;
 
 function newId() {
@@ -75,8 +76,7 @@ function destination(item: SyncItem) {
 function statusLabel(status: SyncItem["lastStatus"]) {
   return {
     not_synced: "未同步",
-    up_to_date: "已是最新",
-    updated: "已更新",
+    synced: "已同步",
     failed: "失败",
   }[status];
 }
@@ -128,6 +128,8 @@ export default function App() {
   const [groupDeleteConfirmed, setGroupDeleteConfirmed] = useState(false);
   const [pendingImport, setPendingImport] = useState<AppConfig>();
   const [importOverwriteConfirmed, setImportOverwriteConfirmed] = useState(false);
+
+  const showOperation = (next: SyncOperation) => flushSync(() => setOperation(next));
 
   useEffect(() => {
     api.loadConfig().then(setConfig).catch(() => setConfig(EMPTY_CONFIG)).finally(() => setLoaded(true));
@@ -277,11 +279,11 @@ export default function App() {
 
   const previewItems = async (items: SyncItem[]) => {
     if (!config.rootDirectory) return setError("请先选择默认根目录。");
-    setOperation({ kind: "preview", current: 0, total: items.length });
+    showOperation({ kind: "preview", current: 0, total: items.length });
     try {
       const results: Array<{ item: SyncItem; preview: SyncPreview }> = [];
       for (const [index, item] of items.entries()) {
-        setOperation({ kind: "preview", current: index + 1, total: items.length, itemName: item.destinationName });
+        showOperation({ kind: "preview", current: index + 1, total: items.length, itemName: item.destinationName });
         results.push({ item, preview: await api.preview(item, config.rootDirectory) });
       }
       setPreviews(results);
@@ -301,12 +303,12 @@ export default function App() {
       setPreviews([]);
       return;
     }
-    setOperation({ kind: "sync", current: 0, total: changedPreviews.length });
+    showOperation({ kind: "sync", current: 0, total: changedPreviews.length });
     try {
       let next = config;
       const failures: string[] = [];
       for (const [index, { item }] of changedPreviews.entries()) {
-        setOperation({ kind: "sync", current: index + 1, total: changedPreviews.length, itemName: item.destinationName });
+        showOperation({ kind: "sync", current: index + 1, total: changedPreviews.length, itemName: item.destinationName });
         try {
           const updated = await api.sync(item, config.rootDirectory);
           next = { ...next, items: next.items.map((current) => current.id === updated.id ? updated : current) };

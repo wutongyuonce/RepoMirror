@@ -2,13 +2,13 @@
 
 [English](config-format.md)
 
-RepoMirror 导入和导出使用 `schemaVersion: 1` 的 JSON。除 `rootDirectory` 和 `theme` 外，所有顶层字段都是必填项；所有同步条目字段也都是必填项。未知的状态字段必须以 `null` 明确写出。
+RepoMirror 导入和导出使用 `schemaVersion: 2` 的 JSON。除 `rootDirectory` 和 `theme` 外，所有顶层字段都是必填项；所有同步条目字段也都是必填项。未知的状态字段必须以 `null` 明确写出。
 
 ## 顶层字段
 
 | 字段 | 类型 | 规则 |
 | --- | --- | --- |
-| `schemaVersion` | number | 必须为 `1`。 |
+| `schemaVersion` | number | 必须为 `2`。 |
 | `rootDirectory` | string 或省略 | 绝对本地路径。 |
 | `theme` | `light`、`dark` 或省略 | 应用外观。 |
 | `folderGroups` | string array | 唯一、非空的相对路径。 |
@@ -25,7 +25,7 @@ RepoMirror 导入和导出使用 `schemaVersion: 1` 的 JSON。除 `rootDirector
 | `repoUrl` | 与来源匹配的 `https://github.com/<owner>/<repo>.git` URL。 |
 | `branch` 与 `sourcePath` | 仓库来源时均为 `null`；目录来源时均须存在，并与 `tree` URL 一致。 |
 | `mirror` | 布尔值。 |
-| `lastStatus` | `not_synced`、`up_to_date`、`updated` 或 `failed`。 |
+| `lastStatus` | `not_synced`、`synced` 或 `failed`。 |
 | `lastSyncedAt` | RFC 3339 时间戳或 `null`。 |
 | `lastCommit`、`lastMessage` | 字符串或 `null`。 |
 

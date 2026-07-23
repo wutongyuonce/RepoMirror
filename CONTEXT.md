@@ -41,7 +41,7 @@ Removal of a Folder Group, all of its descendant Folder Groups, and their Sync I
 The final folder name of a Sync Item beneath its Folder Group. It defaults to the Source's repository or directory name and may be customized.
 
 **Sync Status**:
-The most recent result recorded for a Sync Item: not synced, up to date, updated, or failed.
+The most recent result recorded for a Sync Item: not synced, synced, or failed.
 
 **Configuration Export**:
 A JSON representation of the Default Root Directory and all saved Sync Items, used for backup and transfer between machines.

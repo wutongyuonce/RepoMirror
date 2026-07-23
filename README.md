@@ -28,7 +28,7 @@ Synchronizing never starts without a preview and confirmation. Mirror mode may r
 
 RepoMirror retrieves the newest commit from each configured GitHub source, then compares the source directory with that item's final destination directory. It writes only files that are new or different and leaves identical files untouched. A new GitHub commit therefore does not necessarily change local files: a commit outside the configured repository directory has no effect on that item.
 
-The list's `Up to date` and `Updated` labels describe the result of that item's most recent completed synchronization; they are not a background live check of GitHub. Run a preview to fetch the source again and determine the current file-level differences. An empty preview means no synchronization is needed, and RepoMirror does not offer a confirmation action in that case.
+The list records only three results: `Not synced`, `Synced`, and `Failed`. `Synced` means the item's most recent synchronization completed successfully; it is not a background live check of GitHub. Run a preview to fetch the source again and determine the current file-level differences. An empty preview means no synchronization is needed, and RepoMirror does not offer a confirmation action in that case.
 
 `Sync all` runs every configured item, including items nested in folder groups. It does not treat the default root directory as one large destination, so unrelated files and folders at the root are preserved. Each item is handled independently at `<rootDirectory>/<folderGroup>/<destinationName>`.
 
@@ -36,11 +36,11 @@ With `mirror: true`, source files replace same-named local files and local files
 
 ## Configuration
 
-RepoMirror stores its working configuration in the macOS application-support directory. Exported files use a stable JSON contract with `schemaVersion: 1`.
+RepoMirror stores its working configuration in the macOS application-support directory. Exported files use a stable JSON contract with `schemaVersion: 2`.
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "rootDirectory": "/Users/you/RepoMirror Library",
   "theme": "dark",
   "folderGroups": ["tools/browser"],

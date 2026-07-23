@@ -5,7 +5,7 @@
   "additionalProperties": false,
   "required": ["schemaVersion", "folderGroups", "items"],
   "properties": {
-    "schemaVersion": { "const": 1 },
+    "schemaVersion": { "const": 2 },
     "rootDirectory": { "type": "string" },
     "theme": { "enum": ["light", "dark"] },
     "folderGroups": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
@@ -24,7 +24,7 @@
           "folderGroup": { "type": "string" },
           "destinationName": { "type": "string", "minLength": 1 },
           "mirror": { "type": "boolean" },
-          "lastStatus": { "enum": ["not_synced", "up_to_date", "updated", "failed"] },
+          "lastStatus": { "enum": ["not_synced", "synced", "failed"] },
           "lastSyncedAt": { "type": ["string", "null"], "format": "date-time" },
           "lastCommit": { "type": ["string", "null"] },
           "lastMessage": { "type": ["string", "null"] }

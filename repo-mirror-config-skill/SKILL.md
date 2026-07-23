@@ -1,11 +1,11 @@
 ---
 name: repo-mirror-config
-description: Create, explain, review, or repair RepoMirror configuration JSON. Use when a user wants to prepare a RepoMirror import file, convert GitHub repository or directory links into sync items, validate a configuration, or understand the schemaVersion 1 format.
+description: Create, explain, review, or repair RepoMirror configuration JSON. Use when a user wants to prepare a RepoMirror import file, convert GitHub repository or directory links into sync items, validate a configuration, or understand the schemaVersion 2 format.
 ---
 
 # RepoMirror Configuration
 
-Create only `schemaVersion: 1` JSON. Read [references/schema.md](references/schema.md) before generating, modifying, or reviewing a configuration.
+Create only `schemaVersion: 2` JSON. Read [references/schema.md](references/schema.md) before generating, modifying, or reviewing a configuration.
 
 ## Workflow
 
@@ -18,7 +18,7 @@ Create only `schemaVersion: 1` JSON. Read [references/schema.md](references/sche
 ## Final Checklist
 
 - Use the exact top-level fields from the reference; do not add comments or unknown fields.
-- Set `schemaVersion` to `1`.
+- Set `schemaVersion` to `2`.
 - Keep `rootDirectory` absolute when present.
 - Keep folder groups unique, non-empty, relative, and free of `.` or `..` path segments.
 - Keep every `id` and final destination path unique.

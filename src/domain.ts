@@ -1,4 +1,4 @@
-export type SyncStatus = "not_synced" | "up_to_date" | "updated" | "failed";
+export type SyncStatus = "not_synced" | "synced" | "failed";
 
 export interface SyncItem {
   id: string;
@@ -16,7 +16,7 @@ export interface SyncItem {
 }
 
 export interface AppConfig {
-  schemaVersion: 1;
+  schemaVersion: 2;
   rootDirectory?: string;
   theme?: "light" | "dark";
   folderGroups: string[];

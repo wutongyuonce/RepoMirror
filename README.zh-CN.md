@@ -28,7 +28,7 @@ RepoMirror 使用 Mac 上已有的 `git` 可执行文件与凭据。只要 Git �
 
 RepoMirror 会获取每个已配置 GitHub 来源的最新提交，然后比较来源目录与该条目的最终目标目录。它只会写入新增或内容不同的文件，完全相同的文件不会被改动。因此，GitHub 有新提交并不一定会改变本地文件：若提交未影响已配置的仓库目录，该条目不会发生实际文件变更。
 
-列表中的“已是最新”和“已更新”表示该条目上一次完成同步的结果，不是后台实时检查 GitHub 的状态。运行预览会重新获取来源，并判断当前的文件级差异。预览为空表示无需同步，此时 RepoMirror 不会提供确认同步操作。
+列表仅记录三种结果：“未同步”、“已同步”和“失败”。“已同步”表示该条目最近一次同步已成功完成，不是后台实时检查 GitHub 的状态。运行预览会重新获取来源，并判断当前的文件级差异。预览为空表示无需同步，此时 RepoMirror 不会提供确认同步操作。
 
 `Sync all` 会执行所有已配置条目，包括文件夹组内的条目。它不会把默认根目录当成一个整体目标目录同步，因此根目录中无关的文件和文件夹会被保留。每个条目都独立处理，最终路径为 `<rootDirectory>/<folderGroup>/<destinationName>`。
 
@@ -36,11 +36,11 @@ RepoMirror 会获取每个已配置 GitHub 来源的最新提交，然后比较�
 
 ## 配置
 
-RepoMirror 将工作配置保存在 macOS 的应用支持目录中。导出的文件使用稳定的 JSON 合约，`schemaVersion` 为 `1`。
+RepoMirror 将工作配置保存在 macOS 的应用支持目录中。导出的文件使用稳定的 JSON 合约，`schemaVersion` 为 `2`。
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "rootDirectory": "/Users/you/RepoMirror Library",
   "theme": "dark",
   "folderGroups": ["tools/browser"],

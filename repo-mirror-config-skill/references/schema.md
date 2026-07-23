@@ -1,8 +1,8 @@
-# RepoMirror JSON Schema 1
+# RepoMirror JSON Schema 2
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "rootDirectory": "/absolute/path/optional",
   "theme": "light",
   "folderGroups": ["tools/browser"],
@@ -25,9 +25,9 @@
 }
 ```
 
-Top-level fields: `schemaVersion` must be `1`; `rootDirectory` and `theme` are optional. `theme` is `light` or `dark`. `folderGroups` contains unique non-empty relative paths.
+Top-level fields: `schemaVersion` must be `2`; `rootDirectory` and `theme` are optional. `theme` is `light` or `dark`. `folderGroups` contains unique non-empty relative paths.
 
-Every Sync Item contains all displayed fields. `lastStatus` is `not_synced`, `up_to_date`, `updated`, or `failed`. The three `last*` fields may be `null`; `lastSyncedAt` otherwise uses RFC 3339.
+Every Sync Item contains all displayed fields. `lastStatus` is `not_synced`, `synced`, or `failed`. The three `last*` fields may be `null`; `lastSyncedAt` otherwise uses RFC 3339.
 
 For a repository Source, use a two-segment GitHub URL and set both `branch` and `sourcePath` to `null`. For a directory Source, use `https://github.com/<owner>/<repo>/tree/<branch>/<path>` and copy `<branch>` and `<path>` exactly. `repoUrl` always uses the matching `.git` URL.
 

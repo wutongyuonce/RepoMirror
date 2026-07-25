@@ -14,7 +14,7 @@ use tempfile::TempDir;
 use url::Url;
 use walkdir::WalkDir;
 
-const CONFIG_SCHEMA_VERSION: u8 = 2;
+const CONFIG_SCHEMA_VERSION: u8 = 3;
 
 fn default_schema_version() -> u8 {
     CONFIG_SCHEMA_VERSION
@@ -25,9 +25,9 @@ fn default_schema_version() -> u8 {
 struct AppConfig {
     #[serde(default = "default_schema_version")]
     schema_version: u8,
-    root_directory: Option<String>,
+    root_directories: Vec<RootDirectory>,
     theme: Option<Theme>,
-    folder_groups: Vec<String>,
+    folder_groups: Vec<FolderGroup>,
     items: Vec<SyncItem>,
 }
 
@@ -35,12 +35,26 @@ impl Default for AppConfig {
     fn default() -> Self {
         Self {
             schema_version: CONFIG_SCHEMA_VERSION,
-            root_directory: None,
+            root_directories: vec![],
             theme: None,
             folder_groups: vec![],
             items: vec![],
         }
     }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RootDirectory {
+    id: String,
+    path: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct FolderGroup {
+    root_id: String,
+    path: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -51,6 +65,7 @@ struct SyncItem {
     repo_url: String,
     branch: Option<String>,
     source_path: Option<String>,
+    root_id: String,
     folder_group: String,
     destination_name: String,
     mirror: bool,
@@ -102,7 +117,20 @@ fn load_config(app: AppHandle) -> Result<AppConfig, String> {
         return Ok(AppConfig::default());
     }
     let file = fs::File::open(&path).map_err(|error| format!("无法读取配置：{error}"))?;
-    let config: AppConfig = serde_json::from_reader(file).map_err(|error| format!("配置文件格式无效：{error}"))?;
+    let value: serde_json::Value =
+        serde_json::from_reader(file).map_err(|error| format!("配置文件格式无效：{error}"))?;
+    let schema_version = value
+        .get("schemaVersion")
+        .and_then(serde_json::Value::as_u64);
+    if schema_version == Some(2) {
+        fs::remove_file(&path).map_err(|error| format!("无法清除旧版配置：{error}"))?;
+        return Ok(AppConfig::default());
+    }
+    if schema_version != Some(CONFIG_SCHEMA_VERSION.into()) {
+        return Err("配置版本不受支持。".to_owned());
+    }
+    let config: AppConfig =
+        serde_json::from_value(value).map_err(|error| format!("配置文件格式无效：{error}"))?;
     validate_config(&config)?;
     Ok(config)
 }
@@ -110,10 +138,14 @@ fn load_config(app: AppHandle) -> Result<AppConfig, String> {
 #[tauri::command]
 fn save_config(app: AppHandle, config: AppConfig) -> Result<(), String> {
     validate_config(&config)?;
-
     let path = config_path(&app)?;
+    write_config(&path, &config)
+}
+
+fn write_config(path: &Path, config: &AppConfig) -> Result<(), String> {
     let temporary = path.with_extension("json.tmp");
-    let json = serde_json::to_vec_pretty(&config).map_err(|error| format!("无法序列化配置：{error}"))?;
+    let json =
+        serde_json::to_vec_pretty(&config).map_err(|error| format!("无法序列化配置：{error}"))?;
     fs::write(&temporary, json).map_err(|error| format!("无法写入配置：{error}"))?;
     fs::rename(&temporary, &path).map_err(|error| format!("无法保存配置：{error}"))
 }
@@ -121,8 +153,9 @@ fn save_config(app: AppHandle, config: AppConfig) -> Result<(), String> {
 #[tauri::command]
 fn select_root() -> Option<String> {
     FileDialog::new()
-        .set_title("选择 RepoMirror 默认根目录")
+        .set_title("选择 RepoMirror 根目录")
         .pick_folder()
+        .and_then(|path| fs::canonicalize(path).ok())
         .map(|path| path.to_string_lossy().into_owned())
 }
 
@@ -136,11 +169,17 @@ fn import_config() -> Result<Option<AppConfig>, String> {
         return Ok(None);
     };
     let file = fs::File::open(&path).map_err(|error| format!("无法读取导入文件：{error}"))?;
-    let value: serde_json::Value = serde_json::from_reader(file).map_err(|error| format!("导入文件不是有效 JSON：{error}"))?;
-    if value.get("schemaVersion").and_then(serde_json::Value::as_u64) != Some(CONFIG_SCHEMA_VERSION.into()) {
-        return Err("导入文件必须包含 schemaVersion: 2。".to_owned());
+    let value: serde_json::Value =
+        serde_json::from_reader(file).map_err(|error| format!("导入文件不是有效 JSON：{error}"))?;
+    if value
+        .get("schemaVersion")
+        .and_then(serde_json::Value::as_u64)
+        != Some(CONFIG_SCHEMA_VERSION.into())
+    {
+        return Err("导入文件必须包含 schemaVersion: 3。旧版配置不再支持。".to_owned());
     }
-    let config: AppConfig = serde_json::from_value(value).map_err(|error| format!("导入文件不符合 RepoMirror 配置格式：{error}"))?;
+    let config: AppConfig = serde_json::from_value(value)
+        .map_err(|error| format!("导入文件不符合 RepoMirror 配置格式：{error}"))?;
     validate_config(&config)?;
     Ok(Some(config))
 }
@@ -155,7 +194,8 @@ fn export_config(config: AppConfig) -> Result<bool, String> {
     else {
         return Ok(false);
     };
-    let json = serde_json::to_vec_pretty(&config).map_err(|error| format!("无法序列化配置：{error}"))?;
+    let json =
+        serde_json::to_vec_pretty(&config).map_err(|error| format!("无法序列化配置：{error}"))?;
     fs::write(path, json).map_err(|error| format!("无法导出配置：{error}"))?;
     Ok(true)
 }
@@ -192,7 +232,10 @@ async fn sync_item(item: SyncItem, root_directory: String) -> Result<SyncItem, S
 }
 
 fn config_path(app: &AppHandle) -> Result<PathBuf, String> {
-    let directory = app.path().app_config_dir().map_err(|error| format!("无法定位应用配置目录：{error}"))?;
+    let directory = app
+        .path()
+        .app_config_dir()
+        .map_err(|error| format!("无法定位应用配置目录：{error}"))?;
     fs::create_dir_all(&directory).map_err(|error| format!("无法创建应用配置目录：{error}"))?;
     Ok(directory.join("config.json"))
 }
@@ -202,7 +245,17 @@ fn validate_relative_path(value: &str) -> Result<(), String> {
         return Ok(());
     }
     let path = Path::new(value);
-    if path.is_absolute() || path.components().any(|component| matches!(component, Component::CurDir | Component::ParentDir | Component::RootDir | Component::Prefix(_))) {
+    if path.is_absolute()
+        || path.components().any(|component| {
+            matches!(
+                component,
+                Component::CurDir
+                    | Component::ParentDir
+                    | Component::RootDir
+                    | Component::Prefix(_)
+            )
+        })
+    {
         return Err("文件夹路径必须是普通相对路径。".to_owned());
     }
     Ok(())
@@ -212,20 +265,30 @@ fn validate_config(config: &AppConfig) -> Result<(), String> {
     if config.schema_version != CONFIG_SCHEMA_VERSION {
         return Err(format!("仅支持 schemaVersion: {CONFIG_SCHEMA_VERSION}。"));
     }
-    if let Some(root) = &config.root_directory {
-        if !Path::new(root).is_absolute() {
-            return Err("默认根目录必须是绝对路径。".to_owned());
+    let mut roots: HashSet<String> = HashSet::new();
+    let mut root_paths: HashSet<PathBuf> = HashSet::new();
+    for root in &config.root_directories {
+        if root.id.trim().is_empty() || !roots.insert(root.id.clone()) {
+            return Err("每个根目录必须有唯一且非空的 id。".to_owned());
+        }
+        let canonical = fs::canonicalize(&root.path)
+            .map_err(|_| format!("根目录不存在或无法访问：{}", root.path))?;
+        if !canonical.is_dir() || !root_paths.insert(canonical) {
+            return Err("根目录重复或不是目录。".to_owned());
         }
     }
 
-    let mut groups: HashSet<String> = HashSet::new();
+    let mut groups: HashSet<(String, String)> = HashSet::new();
     for group in &config.folder_groups {
-        if group.is_empty() {
+        if group.path.is_empty() {
             return Err("文件夹组不能是根目录。".to_owned());
         }
-        validate_relative_path(group)?;
-        if !groups.insert(group.clone()) {
-            return Err(format!("文件夹组重复：{group}"));
+        if !roots.contains(&group.root_id) {
+            return Err("文件夹组引用了不存在的根目录。".to_owned());
+        }
+        validate_relative_path(&group.path)?;
+        if !groups.insert((group.root_id.clone(), group.path.clone())) {
+            return Err(format!("文件夹组重复：{}", group.path));
         }
     }
 
@@ -235,29 +298,65 @@ fn validate_config(config: &AppConfig) -> Result<(), String> {
         if item.id.trim().is_empty() || !identifiers.insert(item.id.clone()) {
             return Err("每个同步项必须有唯一且非空的 id。".to_owned());
         }
+        if !roots.contains(&item.root_id) {
+            return Err("同步项引用了不存在的根目录。".to_owned());
+        }
         validate_relative_path(&item.folder_group)?;
-        if !item.folder_group.is_empty() && !groups.contains(&item.folder_group) {
-            return Err(format!("同步项引用了不存在的文件夹组：{}", item.folder_group));
+        if !item.folder_group.is_empty()
+            && !groups.contains(&(item.root_id.clone(), item.folder_group.clone()))
+        {
+            return Err(format!(
+                "同步项引用了不存在的文件夹组：{}",
+                item.folder_group
+            ));
         }
         validate_name(&item.destination_name)?;
         validate_source(item)?;
         if let Some(timestamp) = &item.last_synced_at {
-            chrono::DateTime::parse_from_rfc3339(timestamp).map_err(|_| format!("同步时间不是 RFC 3339 格式：{timestamp}"))?;
+            chrono::DateTime::parse_from_rfc3339(timestamp)
+                .map_err(|_| format!("同步时间不是 RFC 3339 格式：{timestamp}"))?;
         }
-        let destination = format!("{}/{}", item.folder_group, item.destination_name);
+        let destination = format!(
+            "{}/{}/{}",
+            item.root_id, item.folder_group, item.destination_name
+        );
         if !destinations.insert(destination) {
             return Err("同步项目标路径不能重复。".to_owned());
+        }
+    }
+
+    for group in &config.folder_groups {
+        for item in &config.items {
+            if group.root_id != item.root_id {
+                continue;
+            }
+            let destination = if item.folder_group.is_empty() {
+                item.destination_name.clone()
+            } else {
+                format!("{}/{}", item.folder_group, item.destination_name)
+            };
+            if group.path == destination || group.path.starts_with(&format!("{destination}/")) {
+                return Err("文件夹组不能位于同步项目标目录内。".to_owned());
+            }
         }
     }
     Ok(())
 }
 
 fn validate_source(item: &SyncItem) -> Result<(), String> {
-    let source_url = Url::parse(&item.source_url).map_err(|_| "sourceUrl 必须是有效 URL。".to_owned())?;
-    if source_url.scheme() != "https" || source_url.host_str() != Some("github.com") || source_url.query().is_some() || source_url.fragment().is_some() {
+    let source_url =
+        Url::parse(&item.source_url).map_err(|_| "sourceUrl 必须是有效 URL。".to_owned())?;
+    if source_url.scheme() != "https"
+        || source_url.host_str() != Some("github.com")
+        || source_url.query().is_some()
+        || source_url.fragment().is_some()
+    {
         return Err("sourceUrl 必须是无查询参数的 https://github.com 链接。".to_owned());
     }
-    let source_parts: Vec<_> = source_url.path_segments().map(|parts| parts.filter(|part| !part.is_empty()).collect()).unwrap_or_default();
+    let source_parts: Vec<_> = source_url
+        .path_segments()
+        .map(|parts| parts.filter(|part| !part.is_empty()).collect())
+        .unwrap_or_default();
     let source_is_repo = source_parts.len() == 2;
     let source_is_folder = source_parts.len() >= 5 && source_parts[2] == "tree";
     if !source_is_repo && !source_is_folder {
@@ -268,15 +367,25 @@ fn validate_source(item: &SyncItem) -> Result<(), String> {
     if repo_url.scheme() != "https" || repo_url.host_str() != Some("github.com") {
         return Err("repoUrl 必须是 https://github.com 地址。".to_owned());
     }
-    let repo_parts: Vec<_> = repo_url.path_segments().map(|parts| parts.filter(|part| !part.is_empty()).collect()).unwrap_or_default();
-    if repo_parts.len() != 2 || !repo_parts[1].ends_with(".git") || source_parts[0] != repo_parts[0] || source_parts[1] != repo_parts[1].trim_end_matches(".git") {
+    let repo_parts: Vec<_> = repo_url
+        .path_segments()
+        .map(|parts| parts.filter(|part| !part.is_empty()).collect())
+        .unwrap_or_default();
+    if repo_parts.len() != 2
+        || !repo_parts[1].ends_with(".git")
+        || source_parts[0] != repo_parts[0]
+        || source_parts[1] != repo_parts[1].trim_end_matches(".git")
+    {
         return Err("repoUrl 必须与 sourceUrl 指向同一个 GitHub 仓库。".to_owned());
     }
 
     match (&item.branch, &item.source_path) {
         (None, None) if source_is_repo => Ok(()),
         (Some(branch), Some(path)) if source_is_folder => {
-            if branch.trim().is_empty() || branch != source_parts[3] || path != &source_parts[4..].join("/") {
+            if branch.trim().is_empty()
+                || branch != source_parts[3]
+                || path != &source_parts[4..].join("/")
+            {
                 return Err("branch 和 sourcePath 必须与 sourceUrl 的目录链接一致。".to_owned());
             }
             validate_relative_path(path)
@@ -286,7 +395,12 @@ fn validate_source(item: &SyncItem) -> Result<(), String> {
 }
 
 fn validate_name(value: &str) -> Result<(), String> {
-    if value.trim().is_empty() || value.contains('/') || value.contains('\\') || value == "." || value == ".." {
+    if value.trim().is_empty()
+        || value.contains('/')
+        || value.contains('\\')
+        || value == "."
+        || value == ".."
+    {
         return Err("最终文件夹名称无效。".to_owned());
     }
     Ok(())
@@ -297,29 +411,82 @@ fn destination_path(root_directory: &str, item: &SyncItem) -> Result<PathBuf, St
     validate_name(&item.destination_name)?;
     let root = PathBuf::from(root_directory);
     if !root.is_absolute() {
-        return Err("默认根目录必须是绝对路径。".to_owned());
+        return Err("根目录必须是绝对路径。".to_owned());
     }
     Ok(root.join(&item.folder_group).join(&item.destination_name))
 }
 
+#[tauri::command]
+fn delete_directories(paths: Vec<String>) -> Result<(), String> {
+    for path in paths {
+        let directory = PathBuf::from(&path);
+        if !directory.is_absolute() {
+            return Err("只能删除绝对路径目录。".to_owned());
+        }
+        if directory.exists() {
+            if !directory.is_dir() {
+                return Err(format!("不是目录：{path}"));
+            }
+            fs::remove_dir_all(&directory)
+                .map_err(|error| format!("无法删除目录 {path}：{error}"))?;
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn move_directory(from: String, to: String) -> Result<(), String> {
+    let source = PathBuf::from(&from);
+    let destination = PathBuf::from(&to);
+    if !source.is_absolute() || !destination.is_absolute() || !source.is_dir() {
+        return Err("本地目标目录无效。".to_owned());
+    }
+    if destination.exists() {
+        return Err("新位置已有同名本地文件夹，无法移动。".to_owned());
+    }
+    if let Some(parent) = destination.parent() {
+        fs::create_dir_all(parent).map_err(|error| format!("无法创建新位置：{error}"))?;
+    }
+    fs::rename(&source, &destination).map_err(|error| format!("无法移动本地目标目录：{error}"))
+}
+
+#[tauri::command]
+fn directory_exists(path: String) -> bool {
+    Path::new(&path).is_dir()
+}
+
 fn prepare_source(item: &SyncItem) -> Result<PreparedSource, String> {
-    let temporary_directory = tempfile::tempdir().map_err(|error| format!("无法创建临时目录：{error}"))?;
+    let temporary_directory =
+        tempfile::tempdir().map_err(|error| format!("无法创建临时目录：{error}"))?;
     let clone_directory = temporary_directory.path().join("source");
     let mut clone = Command::new("git");
-    clone.arg("clone").arg("--depth").arg("1").arg("--filter=blob:none");
+    clone
+        .arg("clone")
+        .arg("--depth")
+        .arg("1")
+        .arg("--filter=blob:none");
     if item.source_path.is_some() {
         clone.arg("--sparse");
     }
     if let Some(branch) = &item.branch {
         clone.arg("--branch").arg(branch);
     }
-    clone.arg(&item.repo_url).arg(&clone_directory).env("GIT_TERMINAL_PROMPT", "0");
+    clone
+        .arg(&item.repo_url)
+        .arg(&clone_directory)
+        .env("GIT_TERMINAL_PROMPT", "0");
     run_git(clone, "无法获取 GitHub 来源")?;
 
     let source = if let Some(source_path) = &item.source_path {
         validate_relative_path(source_path)?;
         let mut sparse = Command::new("git");
-        sparse.arg("-C").arg(&clone_directory).arg("sparse-checkout").arg("set").arg("--no-cone").arg(source_path);
+        sparse
+            .arg("-C")
+            .arg(&clone_directory)
+            .arg("sparse-checkout")
+            .arg("set")
+            .arg("--no-cone")
+            .arg(source_path);
         run_git(sparse, "无法读取仓库子目录")?;
         clone_directory.join(source_path)
     } else {
@@ -330,25 +497,46 @@ fn prepare_source(item: &SyncItem) -> Result<PreparedSource, String> {
     }
 
     let mut revision = Command::new("git");
-    revision.arg("-C").arg(&clone_directory).arg("rev-parse").arg("HEAD");
+    revision
+        .arg("-C")
+        .arg(&clone_directory)
+        .arg("rev-parse")
+        .arg("HEAD");
     let commit = String::from_utf8(run_git(revision, "无法读取来源版本")?)
         .map_err(|_| "Git 返回了无效版本号。".to_owned())?
         .trim()
         .to_owned();
 
-    Ok(PreparedSource { _temporary_directory: temporary_directory, source, commit })
+    Ok(PreparedSource {
+        _temporary_directory: temporary_directory,
+        source,
+        commit,
+    })
 }
 
 fn run_git(mut command: Command, context: &str) -> Result<Vec<u8>, String> {
-    let output = command.output().map_err(|error| format!("{context}：{error}"))?;
+    let output = command
+        .output()
+        .map_err(|error| format!("{context}：{error}"))?;
     if output.status.success() {
         return Ok(output.stdout);
     }
     let message = String::from_utf8_lossy(&output.stderr).trim().to_owned();
-    Err(format!("{context}：{}", if message.is_empty() { "Git 命令失败。" } else { &message }))
+    Err(format!(
+        "{context}：{}",
+        if message.is_empty() {
+            "Git 命令失败。"
+        } else {
+            &message
+        }
+    ))
 }
 
-fn compare_trees(source: &Path, destination: &Path, mirror: bool) -> Result<Vec<PreviewChange>, String> {
+fn compare_trees(
+    source: &Path,
+    destination: &Path,
+    mirror: bool,
+) -> Result<Vec<PreviewChange>, String> {
     let source_files = collect_files(source)?;
     let destination_files = collect_files(destination)?;
     let mut changes = Vec::new();
@@ -356,14 +544,28 @@ fn compare_trees(source: &Path, destination: &Path, mirror: bool) -> Result<Vec<
     for (relative, source_file) in &source_files {
         let path = display_path(relative);
         match destination_files.get(relative) {
-            None => changes.push(PreviewChange { kind: "add".to_owned(), path }),
-            Some(destination_file) if !files_equal(source_file, destination_file)? => changes.push(PreviewChange { kind: "modify".to_owned(), path }),
+            None => changes.push(PreviewChange {
+                kind: "add".to_owned(),
+                path,
+            }),
+            Some(destination_file) if !files_equal(source_file, destination_file)? => {
+                changes.push(PreviewChange {
+                    kind: "modify".to_owned(),
+                    path,
+                })
+            }
             _ => {}
         }
     }
     if mirror {
-        for relative in destination_files.keys().filter(|relative| !source_files.contains_key(*relative)) {
-            changes.push(PreviewChange { kind: "delete".to_owned(), path: display_path(relative) });
+        for relative in destination_files
+            .keys()
+            .filter(|relative| !source_files.contains_key(*relative))
+        {
+            changes.push(PreviewChange {
+                kind: "delete".to_owned(),
+                path: display_path(relative),
+            });
         }
     }
     changes.sort_by(|left, right| left.path.cmp(&right.path));
@@ -386,14 +588,18 @@ fn apply_sync(source: &Path, destination: &Path, mirror: bool) -> Result<(), Str
         };
         if needs_copy {
             if target.is_dir() {
-                fs::remove_dir_all(&target).map_err(|error| format!("无法替换目标目录：{error}"))?;
+                fs::remove_dir_all(&target)
+                    .map_err(|error| format!("无法替换目标目录：{error}"))?;
             }
             fs::copy(source_file, &target).map_err(|error| format!("无法写入目标文件：{error}"))?;
         }
     }
 
     if mirror {
-        for relative in destination_files.keys().filter(|relative| !source_files.contains_key(*relative)) {
+        for relative in destination_files
+            .keys()
+            .filter(|relative| !source_files.contains_key(*relative))
+        {
             let target = destination.join(relative);
             if target.exists() {
                 fs::remove_file(&target).map_err(|error| format!("无法移除过期文件：{error}"))?;
@@ -409,10 +615,18 @@ fn collect_files(root: &Path) -> Result<BTreeMap<PathBuf, PathBuf>, String> {
     if !root.exists() {
         return Ok(files);
     }
-    for entry in WalkDir::new(root).follow_links(false).into_iter().filter_entry(|entry| !should_ignore(entry.path(), root)) {
+    for entry in WalkDir::new(root)
+        .follow_links(false)
+        .into_iter()
+        .filter_entry(|entry| !should_ignore(entry.path(), root))
+    {
         let entry = entry.map_err(|error| format!("无法读取目录：{error}"))?;
         if entry.file_type().is_file() {
-            let relative = entry.path().strip_prefix(root).map_err(|error| format!("无法解析来源路径：{error}"))?.to_path_buf();
+            let relative = entry
+                .path()
+                .strip_prefix(root)
+                .map_err(|error| format!("无法解析来源路径：{error}"))?
+                .to_path_buf();
             files.insert(relative, entry.into_path());
         }
     }
@@ -420,26 +634,39 @@ fn collect_files(root: &Path) -> Result<BTreeMap<PathBuf, PathBuf>, String> {
 }
 
 fn should_ignore(path: &Path, root: &Path) -> bool {
-    let Ok(relative) = path.strip_prefix(root) else { return false };
+    let Ok(relative) = path.strip_prefix(root) else {
+        return false;
+    };
     relative.components().any(|component| match component {
-        Component::Normal(name) => name == OsStr::new(".git") || name == OsStr::new("node_modules") || name == OsStr::new(".DS_Store"),
+        Component::Normal(name) => {
+            name == OsStr::new(".git")
+                || name == OsStr::new("node_modules")
+                || name == OsStr::new(".DS_Store")
+        }
         _ => false,
     })
 }
 
 fn files_equal(left: &Path, right: &Path) -> Result<bool, String> {
     let left_metadata = fs::metadata(left).map_err(|error| format!("无法读取来源文件：{error}"))?;
-    let right_metadata = fs::metadata(right).map_err(|error| format!("无法读取目标文件：{error}"))?;
+    let right_metadata =
+        fs::metadata(right).map_err(|error| format!("无法读取目标文件：{error}"))?;
     if left_metadata.len() != right_metadata.len() {
         return Ok(false);
     }
-    let mut left_file = fs::File::open(left).map_err(|error| format!("无法打开来源文件：{error}"))?;
-    let mut right_file = fs::File::open(right).map_err(|error| format!("无法打开目标文件：{error}"))?;
+    let mut left_file =
+        fs::File::open(left).map_err(|error| format!("无法打开来源文件：{error}"))?;
+    let mut right_file =
+        fs::File::open(right).map_err(|error| format!("无法打开目标文件：{error}"))?;
     let mut left_buffer = [0; 8192];
     let mut right_buffer = [0; 8192];
     loop {
-        let left_read = left_file.read(&mut left_buffer).map_err(|error| format!("无法读取来源文件：{error}"))?;
-        let right_read = right_file.read(&mut right_buffer).map_err(|error| format!("无法读取目标文件：{error}"))?;
+        let left_read = left_file
+            .read(&mut left_buffer)
+            .map_err(|error| format!("无法读取来源文件：{error}"))?;
+        let right_read = right_file
+            .read(&mut right_buffer)
+            .map_err(|error| format!("无法读取目标文件：{error}"))?;
         if left_read != right_read || left_buffer[..left_read] != right_buffer[..right_read] {
             return Ok(false);
         }
@@ -475,7 +702,18 @@ fn display_path(path: &Path) -> String {
 
 pub fn run() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![load_config, save_config, select_root, import_config, export_config, preview_sync, sync_item])
+        .invoke_handler(tauri::generate_handler![
+            load_config,
+            save_config,
+            select_root,
+            import_config,
+            export_config,
+            preview_sync,
+            sync_item,
+            delete_directories,
+            move_directory,
+            directory_exists
+        ])
         .run(tauri::generate_context!())
         .expect("error while running RepoMirror");
 }
@@ -491,6 +729,7 @@ mod tests {
             repo_url: "https://github.com/example/plugin.git".to_owned(),
             branch: None,
             source_path: None,
+            root_id: "root".to_owned(),
             folder_group: "".to_owned(),
             destination_name: "plugin".to_owned(),
             mirror: true,
@@ -505,7 +744,10 @@ mod tests {
     fn accepts_a_valid_repository_configuration() {
         let config = AppConfig {
             schema_version: CONFIG_SCHEMA_VERSION,
-            root_directory: Some("/Users/example/RepoMirror".to_owned()),
+            root_directories: vec![RootDirectory {
+                id: "root".to_owned(),
+                path: "/tmp".to_owned(),
+            }],
             theme: Some(Theme::Light),
             folder_groups: vec![],
             items: vec![repository_item()],
@@ -519,7 +761,10 @@ mod tests {
         item.repo_url = "https://github.com/example/other.git".to_owned();
         let config = AppConfig {
             schema_version: CONFIG_SCHEMA_VERSION,
-            root_directory: None,
+            root_directories: vec![RootDirectory {
+                id: "root".to_owned(),
+                path: "/tmp".to_owned(),
+            }],
             theme: None,
             folder_groups: vec![],
             items: vec![item],
@@ -529,7 +774,7 @@ mod tests {
 
     #[test]
     fn rejects_unknown_configuration_fields() {
-        let json = r#"{"schemaVersion":2,"folderGroups":[],"items":[],"unexpected":true}"#;
+        let json = r#"{"schemaVersion":3,"rootDirectories":[],"folderGroups":[],"items":[],"unexpected":true}"#;
         assert!(serde_json::from_str::<AppConfig>(json).is_err());
     }
 

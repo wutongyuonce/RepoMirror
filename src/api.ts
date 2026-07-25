@@ -11,4 +11,7 @@ export const api = {
     invoke<SyncPreview>("preview_sync", { item, rootDirectory }),
   sync: (item: SyncItem, rootDirectory: string) =>
     invoke<SyncItem>("sync_item", { item, rootDirectory }),
+  deleteDirectories: (paths: string[]) => invoke<void>("delete_directories", { paths }),
+  moveDirectory: (from: string, to: string) => invoke<void>("move_directory", { from, to }),
+  directoryExists: (path: string) => invoke<boolean>("directory_exists", { path }),
 };

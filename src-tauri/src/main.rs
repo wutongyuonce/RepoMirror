@@ -1,3 +1,3 @@
 fn main() {
-  repo_mirror_lib::run();
+    repo_mirror_lib::run();
 }

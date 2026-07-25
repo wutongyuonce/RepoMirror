@@ -6,18 +6,19 @@ RepoMirror is a focused macOS desktop app for mirroring a GitHub repository, or 
 
 It is especially useful for people building a local library of AI agent skills, prompts, extensions, and open-source tools: keep the folders you actually use on disk, group them however you like, and stop manually checking dozens of GitHub projects for updates.
 
-![image-20260724031247720](img/image-20260724031247720.png)
+![image-20260726022555468](img/image-20260726022555468.png)
 
-![image-20260724031258403](img/image-20260724031258403.png)
+![image-20260726022606544](img/image-20260726022606544.png)
 
 ## Features
 
-- One user-selected default root directory.
-- Expandable path-based folder groups such as `tools/browser`.
+- Multiple user-selected root directories, displayed as one folder tree.
+- Expandable path-based folder groups such as `tools/browser` beneath each root directory.
 - GitHub repository and `tree/<branch>/<path>` directory links.
 - Batch source addition and optional custom destination names.
 - Per-item mirror mode, with a file-by-file preview before every write.
-- Manual single-item and sequential all-item synchronization.
+- Manual single-item synchronization and scope-aware batch synchronization.
+- Drag a Sync Item to another root directory or folder group, with an option to move its managed local destination too.
 - Config import/export, persistent light/dark appearance, and no account or token storage.
 
 RepoMirror uses the Mac's existing `git` executable and credentials. Private repositories work when Git can already authenticate on the machine.
@@ -26,7 +27,7 @@ RepoMirror uses the Mac's existing `git` executable and credentials. Private rep
 
 Synchronizing never starts without a preview and confirmation. Mirror mode may remove files from a destination when they do not exist in the source; disabling mirror mode preserves local extra files.
 
-`.git`, `.DS_Store`, and `node_modules` are never changed by synchronization. Deleting a folder group removes its sync configuration and child sync configurations only; it never deletes local destination files.
+`.git`, `.DS_Store`, and `node_modules` are never changed by synchronization. Deleting a root directory or Folder Group recursively removes its configuration. You may separately opt in to delete the affected managed Destinations; RepoMirror never deletes the root directory itself or unrelated local files inside it.
 
 ### How synchronization works
 
@@ -34,20 +35,24 @@ RepoMirror retrieves the newest commit from each configured GitHub source, then 
 
 The list records only three results: `Not synced`, `Synced`, and `Failed`. `Synced` means the item's most recent synchronization completed successfully; it is not a background live check of GitHub. Run a preview to fetch the source again and determine the current file-level differences. An empty preview means no synchronization is needed, and RepoMirror does not offer a confirmation action in that case.
 
-`Sync all` runs every configured item, including items nested in folder groups. It does not treat the default root directory as one large destination, so unrelated files and folders at the root are preserved. Each item is handled independently at `<rootDirectory>/<folderGroup>/<destinationName>`.
+`Sync current folder` always starts with a scope dialog. Choose either the current location only or the current location and all descendant Folder Groups; recursive scope is selected by default. A root directory scopes only the Sync Items beneath that root. Each item is handled independently at `<rootDirectory>/<folderGroup>/<destinationName>`, so unrelated local files are preserved.
 
 With `mirror: true`, source files replace same-named local files and local files absent from the source are removed, but only inside that item's final destination directory. With `mirror: false`, files absent from the source are retained; changed source files are still updated.
 
 ## Configuration
 
-RepoMirror stores its working configuration in the macOS application-support directory. Exported files use a stable JSON contract with `schemaVersion: 2`.
+RepoMirror stores its working configuration in the macOS application-support directory. Exported files use `schemaVersion: 3`. Version-2 configuration files are intentionally discarded rather than migrated or imported.
 
 ```json
 {
-  "schemaVersion": 2,
-  "rootDirectory": "/Users/you/RepoMirror Library",
+  "schemaVersion": 3,
+  "rootDirectories": [
+    { "id": "library", "path": "/Users/you/RepoMirror Library" }
+  ],
   "theme": "dark",
-  "folderGroups": ["tools/browser"],
+  "folderGroups": [
+    { "rootId": "library", "path": "tools/browser" }
+  ],
   "items": [
     {
       "id": "5ac18832-4c2f-4a61-a8ca-cf7b5f9c4a44",
@@ -55,6 +60,7 @@ RepoMirror stores its working configuration in the macOS application-support dir
       "repoUrl": "https://github.com/narumiruna/pi-extensions.git",
       "branch": "main",
       "sourcePath": "extensions/pi-btw",
+      "rootId": "library",
       "folderGroup": "tools/browser",
       "destinationName": "pi-btw",
       "mirror": true,
@@ -67,7 +73,7 @@ RepoMirror stores its working configuration in the macOS application-support dir
 }
 ```
 
-Imports reject malformed JSON, unsupported schema versions, unknown fields, invalid paths, invalid enum values, duplicate IDs or destinations, and GitHub fields that do not agree with each other. A failed import does not alter the current configuration. When configuration already exists, RepoMirror requires an explicit overwrite confirmation before replacing it. See [docs/config-format.md](docs/config-format.md) and [docs/config-schema.json](docs/config-schema.json) for the full contract.
+Imports reject malformed JSON, unsupported schema versions, unknown fields, invalid paths, invalid enum values, duplicate IDs or destinations, and GitHub fields that do not agree with each other. A failed import does not alter the current configuration. When configuration already exists, RepoMirror requires an explicit overwrite confirmation before replacing it.
 
 ### Configuration Skill for Codex
 
@@ -112,7 +118,7 @@ The command first runs the production frontend build and then produces a release
 
 ```text
 src-tauri/target/release/bundle/macos/RepoMirror.app
-src-tauri/target/release/bundle/dmg/RepoMirror_0.1.0_<architecture>.dmg
+src-tauri/target/release/bundle/dmg/RepoMirror_0.2.0_<architecture>.dmg
 ```
 
 On an Apple Silicon Mac, `<architecture>` is `aarch64`; on an Intel Mac, it is `x64`. The `.app` bundle can run directly, while the `.dmg` is the convenient distribution installer: open it and drag `RepoMirror.app` into Applications. Builds are not code-signed or notarized by this repository, so macOS may require an explicit first-run approval when distributing the app outside the development machine.

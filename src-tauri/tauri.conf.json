@@ -16,6 +16,7 @@
       "height": 760,
       "minWidth": 920,
       "minHeight": 600,
+      "dragDropEnabled": false,
       "resizable": true
     }],
     "security": { "csp": null }
@@ -23,6 +24,15 @@
   "bundle": {
     "active": true,
     "targets": "all",
-    "macOS": { "minimumSystemVersion": "12.0" }
+    "icon": ["icons/icon.icns"],
+    "macOS": {
+      "minimumSystemVersion": "12.0",
+      "dmg": {
+        "background": "resources/dmg-background.png",
+        "windowSize": { "width": 660, "height": 400 },
+        "appPosition": { "x": 180, "y": 170 },
+        "applicationFolderPosition": { "x": 480, "y": 170 }
+      }
+    }
   }
 }

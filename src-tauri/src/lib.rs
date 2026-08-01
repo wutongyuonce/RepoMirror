@@ -784,4 +784,27 @@ mod tests {
         assert!(serde_json::from_str::<SyncStatus>(r#""updated""#).is_err());
         assert!(serde_json::from_str::<SyncStatus>(r#""up_to_date""#).is_err());
     }
+
+    #[test]
+    fn moves_a_destination_without_overwriting_an_existing_directory() {
+        let temporary = tempfile::tempdir().unwrap();
+        let source = temporary.path().join("source");
+        let destination = temporary.path().join("nested/destination");
+        fs::create_dir(&source).unwrap();
+        fs::write(source.join("item.txt"), "contents").unwrap();
+
+        move_directory(
+            source.to_string_lossy().into_owned(),
+            destination.to_string_lossy().into_owned(),
+        )
+        .unwrap();
+
+        assert!(!source.exists());
+        assert_eq!(fs::read_to_string(destination.join("item.txt")).unwrap(), "contents");
+        assert!(move_directory(
+            destination.to_string_lossy().into_owned(),
+            temporary.path().join("nested").to_string_lossy().into_owned(),
+        )
+        .is_err());
+    }
 }

@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="660" height="400" viewBox="0 0 660 400">
+  <rect width="660" height="400" fill="#f7f7f5"/>
+  <rect x="34" y="28" width="44" height="44" rx="12" fill="#1e1e1e"/>
+  <g transform="translate(34 28) scale(1.833333)" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M21 12a9 9 0 0 0-15.5-6.2L3 8"/>
+    <path d="M3 3v5h5"/>
+    <path d="M3 12a9 9 0 0 0 15.5 6.2L21 16"/>
+    <path d="M16 16h5v5"/>
+  </g>
+  <text x="92" y="58" fill="#1e1e1e" font-family="-apple-system, BlinkMacSystemFont, Arial, sans-serif" font-size="27" font-weight="700">RepoMirror</text>
+  <path d="M248 223h164" fill="none" stroke="#1e1e1e" stroke-width="1.5"/>
+  <path d="m405 217 8 6-8 6" fill="none" stroke="#1e1e1e" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="330" y="260" fill="#686868" font-family="-apple-system, BlinkMacSystemFont, Arial, sans-serif" font-size="11" font-weight="600" letter-spacing="1.2" text-anchor="middle">DRAG TO INSTALL</text>
+</svg>

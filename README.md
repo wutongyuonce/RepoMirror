@@ -18,7 +18,9 @@ It is especially useful for people building a local library of AI agent skills, 
 - Batch source addition and optional custom destination names.
 - Per-item mirror mode, with a file-by-file preview before every write.
 - Manual single-item synchronization and scope-aware batch synchronization.
-- Drag a Sync Item to another root directory or folder group, with an option to move its managed local destination too.
+- Drag one or multiple Sync Items to another root directory or folder group, with an option to move their managed local destinations too; the current view stays in place after dropping.
+- Command-click (or Control-click) to select multiple items, and Shift-click to select a range.
+- Rename root directories and folder groups inline by double-clicking, or use their context menu; the context menu can also open the location in Finder.
 - Config import/export, persistent light/dark appearance, and no account or token storage.
 
 RepoMirror uses the Mac's existing `git` executable and credentials. Private repositories work when Git can already authenticate on the machine.
@@ -47,7 +49,7 @@ RepoMirror stores its working configuration in the macOS application-support dir
 {
   "schemaVersion": 3,
   "rootDirectories": [
-    { "id": "library", "path": "/Users/you/RepoMirror Library" }
+    { "id": "library", "path": "/Users/you/RepoMirror Library", "name": "My Library" }
   ],
   "theme": "dark",
   "folderGroups": [

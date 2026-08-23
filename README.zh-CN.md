@@ -18,7 +18,9 @@ RepoMirror 是一款专注于将 GitHub 仓库或其中指定目录镜像同步�
 - 批量添加来源，并可自定义目标文件夹名称。
 - 每个条目独立设置镜像模式；每次写入前提供逐文件预览。
 - 手动同步单个条目，或按范围批量同步当前文件夹。
-- 可将同步项拖至另一根目录或文件夹组，并选择是否一起移动其受管理的本地目标文件夹。
+- 可将一个或多个同步项拖至另一根目录或文件夹组，并选择是否一起移动它们受管理的本地目标文件夹；拖动完成后保持当前页面不跳转。
+- 按住 Command（或 Control）点击可多选，按住 Shift 点击可选择两个条目之间的全部内容。
+- 根目录和文件夹组支持双击重命名，也可右键选择“编辑名字”或在 Finder 中打开所在位置。
 - 配置导入与导出、持久化浅色/深色外观；不存储账号或令牌。
 
 RepoMirror 使用 Mac 上已有的 `git` 可执行文件与凭据。只要 Git 已能在此机器上认证，私有仓库也可正常使用。
@@ -47,7 +49,7 @@ RepoMirror 将工作配置保存在 macOS 的应用支持目录中。导出的�
 {
   "schemaVersion": 3,
   "rootDirectories": [
-    { "id": "library", "path": "/Users/you/RepoMirror Library" }
+    { "id": "library", "path": "/Users/you/RepoMirror Library", "name": "我的资料库" }
   ],
   "theme": "dark",
   "folderGroups": [

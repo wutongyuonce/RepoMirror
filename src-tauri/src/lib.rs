@@ -48,6 +48,7 @@ impl Default for AppConfig {
 struct RootDirectory {
     id: String,
     path: String,
+    name: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -157,6 +158,20 @@ fn select_root() -> Option<String> {
         .pick_folder()
         .and_then(|path| fs::canonicalize(path).ok())
         .map(|path| path.to_string_lossy().into_owned())
+}
+
+#[tauri::command]
+fn open_directory(path: String) -> Result<(), String> {
+    if !Path::new(&path).is_dir() {
+        return Err("文件夹不存在。".to_owned());
+    }
+    std::process::Command::new("open")
+        .arg(&path)
+        .status()
+        .map_err(|error| format!("无法打开文件夹：{error}"))?
+        .success()
+        .then_some(())
+        .ok_or_else(|| "无法打开文件夹。".to_owned())
 }
 
 #[tauri::command]
@@ -712,7 +727,8 @@ pub fn run() {
             sync_item,
             delete_directories,
             move_directory,
-            directory_exists
+            directory_exists,
+            open_directory
         ])
         .run(tauri::generate_context!())
         .expect("error while running RepoMirror");

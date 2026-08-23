@@ -14,4 +14,5 @@ export const api = {
   deleteDirectories: (paths: string[]) => invoke<void>("delete_directories", { paths }),
   moveDirectory: (from: string, to: string) => invoke<void>("move_directory", { from, to }),
   directoryExists: (path: string) => invoke<boolean>("directory_exists", { path }),
+  openDirectory: (path: string) => invoke<void>("open_directory", { path }),
 };

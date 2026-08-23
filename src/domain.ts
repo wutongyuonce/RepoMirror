@@ -3,6 +3,7 @@ export type SyncStatus = "not_synced" | "synced" | "failed";
 export interface RootDirectory {
   id: string;
   path: string;
+  name?: string;
 }
 
 export interface FolderGroup {

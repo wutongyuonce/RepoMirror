@@ -80,7 +80,7 @@ RepoMirror 将工作配置保存在 macOS 的应用支持目录中。导出的�
 
 ### Codex 配置辅助 Skill
 
-本仓库包含 [`repo-mirror-config-skill/`](repo-mirror-config-skill)，这是一个用于创建、解释、审阅和修复 RepoMirror 导入 JSON 的 Codex Skill。它会将 GitHub 仓库或目录链接转换为合法的同步条目，只询问缺失的必要信息，并在返回结果前检查 JSON 规范。
+本仓库包含 [`repo-mirror-config-skill/`](repo-mirror-config-skill)，这是一个用于创建、解释、审阅和修复 RepoMirror 导入 JSON 的 Codex Skill。它会将 GitHub 仓库或目录链接转换为合法的 `schemaVersion: 3` 同步条目，只询问缺失的必要信息，并在返回结果前检查 JSON 规范。
 
 将它安装到本机 Codex skills 目录后，新建一个 Codex task：
 

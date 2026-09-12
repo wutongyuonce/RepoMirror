@@ -80,7 +80,7 @@ Imports reject malformed JSON, unsupported schema versions, unknown fields, inva
 
 ### Configuration Skill for Codex
 
-This repository includes [`repo-mirror-config-skill/`](repo-mirror-config-skill), a Codex skill for creating, explaining, reviewing, and repairing RepoMirror import JSON. It converts GitHub repository or directory links into valid Sync Items, asks only for missing essentials, and checks the schema before returning a result.
+This repository includes [`repo-mirror-config-skill/`](repo-mirror-config-skill), a Codex skill for creating, explaining, reviewing, and repairing RepoMirror import JSON. It converts GitHub repository or directory links into valid `schemaVersion: 3` Sync Items, asks only for missing essentials, and checks the schema before returning a result.
 
 Install it into your local Codex skills directory, then start a new Codex task:
 

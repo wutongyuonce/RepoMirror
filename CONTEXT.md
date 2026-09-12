@@ -17,7 +17,7 @@ The folder on the local machine whose contents are managed by a Sync Item.
 _Avoid_: Output, install path, target directory
 
 **Root Directory**:
-A user-selected local folder that contains Folder Groups and Destinations. A Sync Item belongs to exactly one Root Directory; its saved path is a canonical absolute path so one physical directory cannot appear as multiple roots through symbolic links. The interface displays the folder's system name without a separate custom label.
+A user-selected local folder that contains Folder Groups and Destinations. A Sync Item belongs to exactly one Root Directory; its saved path is a canonical absolute path so one physical directory cannot appear as multiple roots through symbolic links. One Root Directory cannot contain another. The interface displays the folder's system name without a separate custom label.
 _Avoid_: Default root directory, workspace, library, repository
 
 **Mirror Sync**:
@@ -31,7 +31,7 @@ A Source that Git can access only through credentials already configured on the 
 The branch whose newest commit supplies a Sync Item's Source. A repository URL uses the repository's default branch; a GitHub directory URL supplies its own branch.
 
 **Folder Group**:
-A path-based container for Sync Items beneath one Root Directory. Its relative path may contain multiple segments and is rendered as a folder tree; every new path is entered relative to its Root Directory, regardless of which Folder Group is currently selected. A Folder Group cannot be inside or occupy a Sync Item Destination.
+A path-based container for Sync Items beneath one Root Directory. Its relative path may contain multiple segments and is rendered as a folder tree; every new path is entered relative to its Root Directory, regardless of which Folder Group is currently selected. Creating or moving into a nested path also creates any missing ancestor Folder Groups. A Folder Group cannot be inside or occupy a Sync Item Destination.
 _Avoid_: Import group, category
 
 **Delete Folder Group**:
@@ -41,13 +41,19 @@ Removal of a Folder Group, all of its descendant Folder Groups, and their Sync I
 Removal of a Root Directory, its descendant Folder Groups, and their Sync Item configurations. Its delete action is sufficient to remove configuration; the user may separately confirm deletion of the affected managed Destinations, but it never deletes the Root Directory itself or unrelated local files within it.
 
 **Destination Name**:
-The final folder name of a Sync Item beneath its Folder Group. It defaults to the Source's repository or directory name and may be customized.
+The final folder name of a Sync Item beneath its Folder Group. It defaults to the Source's repository or directory name and may be customized. If the managed local Destination exists, the user may rename that folder on disk; otherwise only configuration is updated.
 
 **Move Sync Item**:
-Reassignment of one Sync Item to a Root Directory or Folder Group by dragging it in the interface. Its former Folder Group remains even when empty; if its managed local Destination exists, the user may choose to move that folder to the new Destination. A pre-existing folder at the new Destination prevents the local move and is explicitly reported; configuration-only relocation remains available.
+Reassignment of one Sync Item to a Root Directory or Folder Group by dragging it in the interface. Its former Folder Group remains even when empty. The local-folder confirmation appears only when at least one managed Destination exists on disk; otherwise only configuration is updated. A pre-existing folder at the new Destination prevents the local move and is explicitly reported; configuration-only relocation remains available.
+
+**Move Root Directory**:
+Relocation of a first-level Root Directory by choosing a destination parent folder. The Root Directory keeps its folder name, so the new path is `<parent>/<current folder name>`. Nested Folder Groups do not have this action. If the current local folder exists, the user may move it to the new path; otherwise only the saved path changes. When the destination path does not yet exist and the local folder is not moved, an empty folder is created there so the Root Directory remains valid. A pre-existing folder at the new path prevents the local move.
+
+**Rename Local Folder**:
+When a Root Directory or Folder Group is renamed and the corresponding local folder exists, the user may rename that folder on disk. If it does not exist, only configuration is updated. A pre-existing folder at the new name prevents the local rename.
 
 **Sync Status**:
-The most recent result recorded for a Sync Item: not synced, synced, or failed.
+The most recent result recorded for a Sync Item: not synced, synced, or failed. It is stored in configuration and not shown as a list column.
 
 **Configuration Export**:
 A JSON representation of Root Directories and all saved Sync Items, used for backup and transfer between machines.

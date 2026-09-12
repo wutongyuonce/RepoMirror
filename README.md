@@ -12,15 +12,16 @@ It is especially useful for people building a local library of AI agent skills, 
 
 ## Features
 
-- Multiple user-selected root directories, displayed as one folder tree.
+- Multiple user-selected root directories, displayed as one folder tree. A folder inside an existing root cannot be added as another root, and a new root cannot contain an existing one.
 - Expandable path-based folder groups such as `tools/browser` beneath each root directory.
 - GitHub repository and `tree/<branch>/<path>` directory links.
 - Batch source addition and optional custom destination names.
 - Per-item mirror mode, with a file-by-file preview before every write.
 - Manual single-item synchronization and scope-aware batch synchronization.
-- Drag one or multiple Sync Items to another root directory or folder group, with an option to move their managed local destinations too; the current view stays in place after dropping.
+- Drag one or multiple Sync Items to another root directory or folder group; the local-move prompt appears only when a managed destination exists on disk, otherwise only configuration is updated. The current view stays in place after dropping.
+- Move a first-level root directory from its context menu: choose a destination parent, then either move the local folder there or update the saved path and keep the original folder.
 - Command-click (or Control-click) to select multiple items, and Shift-click to select a range.
-- Rename root directories and folder groups inline by double-clicking, or use their context menu; the context menu can also open the location in Finder.
+- Rename root directories, folder groups, and a Sync Item's destination name. If the corresponding local folder exists, you can rename it on disk; otherwise only configuration is updated. Root and folder group names can also be edited from the context menu, which can open the location in Finder.
 - Config import/export, persistent light/dark appearance, and no account or token storage.
 
 RepoMirror uses the Mac's existing `git` executable and credentials. Private repositories work when Git can already authenticate on the machine.
@@ -35,7 +36,7 @@ Synchronizing never starts without a preview and confirmation. Mirror mode may r
 
 RepoMirror retrieves the newest commit from each configured GitHub source, then compares the source directory with that item's final destination directory. It writes only files that are new or different and leaves identical files untouched. A new GitHub commit therefore does not necessarily change local files: a commit outside the configured repository directory has no effect on that item.
 
-The list records only three results: `Not synced`, `Synced`, and `Failed`. `Synced` means the item's most recent synchronization completed successfully; it is not a background live check of GitHub. Run a preview to fetch the source again and determine the current file-level differences. An empty preview means no synchronization is needed, and RepoMirror does not offer a confirmation action in that case.
+Each Sync Item still records its most recent synchronization time in configuration. Run a preview to fetch the source again and determine the current file-level differences. An empty preview means no synchronization is needed, and RepoMirror does not offer a confirmation action in that case.
 
 `Sync current folder` always starts with a scope dialog. Choose either the current location only or the current location and all descendant Folder Groups; recursive scope is selected by default. A root directory scopes only the Sync Items beneath that root. Each item is handled independently at `<rootDirectory>/<folderGroup>/<destinationName>`, so unrelated local files are preserved.
 

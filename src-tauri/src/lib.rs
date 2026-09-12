@@ -153,11 +153,31 @@ fn write_config(path: &Path, config: &AppConfig) -> Result<(), String> {
 
 #[tauri::command]
 fn select_root() -> Option<String> {
-    FileDialog::new()
-        .set_title("选择 RepoMirror 根目录")
+    select_directory("选择 RepoMirror 根目录".to_owned(), None)
+}
+
+#[tauri::command]
+fn select_directory(title: String, directory: Option<String>) -> Option<String> {
+    let mut dialog = FileDialog::new().set_title(&title);
+    if let Some(path) = directory {
+        dialog = dialog.set_directory(path);
+    }
+    dialog
         .pick_folder()
         .and_then(|path| fs::canonicalize(path).ok())
         .map(|path| path.to_string_lossy().into_owned())
+}
+
+#[tauri::command]
+fn create_directory(path: String) -> Result<(), String> {
+    let directory = PathBuf::from(&path);
+    if !directory.is_absolute() {
+        return Err("只能创建绝对路径目录。".to_owned());
+    }
+    if directory.exists() && !directory.is_dir() {
+        return Err(format!("不是目录：{path}"));
+    }
+    fs::create_dir_all(&directory).map_err(|error| format!("无法创建目录 {path}：{error}"))
 }
 
 #[tauri::command]
@@ -288,8 +308,13 @@ fn validate_config(config: &AppConfig) -> Result<(), String> {
         }
         let canonical = fs::canonicalize(&root.path)
             .map_err(|_| format!("根目录不存在或无法访问：{}", root.path))?;
-        if !canonical.is_dir() || !root_paths.insert(canonical) {
+        if !canonical.is_dir() || !root_paths.insert(canonical.clone()) {
             return Err("根目录重复或不是目录。".to_owned());
+        }
+        if root_paths.iter().any(|existing| {
+            existing != &canonical && (existing.starts_with(&canonical) || canonical.starts_with(existing))
+        }) {
+            return Err("根目录不能位于另一个根目录之内。".to_owned());
         }
     }
 
@@ -721,6 +746,8 @@ pub fn run() {
             load_config,
             save_config,
             select_root,
+            select_directory,
+            create_directory,
             import_config,
             export_config,
             preview_sync,
@@ -763,12 +790,39 @@ mod tests {
             root_directories: vec![RootDirectory {
                 id: "root".to_owned(),
                 path: "/tmp".to_owned(),
+                name: None,
             }],
             theme: Some(Theme::Light),
             folder_groups: vec![],
             items: vec![repository_item()],
         };
         assert!(validate_config(&config).is_ok());
+    }
+
+    #[test]
+    fn rejects_a_root_nested_inside_another_root() {
+        let temporary = tempfile::tempdir().unwrap();
+        let child = temporary.path().join("nested");
+        fs::create_dir(&child).unwrap();
+        let config = AppConfig {
+            schema_version: CONFIG_SCHEMA_VERSION,
+            root_directories: vec![
+                RootDirectory {
+                    id: "outer".to_owned(),
+                    path: temporary.path().to_string_lossy().into_owned(),
+                    name: None,
+                },
+                RootDirectory {
+                    id: "inner".to_owned(),
+                    path: child.to_string_lossy().into_owned(),
+                    name: None,
+                },
+            ],
+            theme: None,
+            folder_groups: vec![],
+            items: vec![],
+        };
+        assert!(validate_config(&config).is_err());
     }
 
     #[test]
@@ -780,6 +834,7 @@ mod tests {
             root_directories: vec![RootDirectory {
                 id: "root".to_owned(),
                 path: "/tmp".to_owned(),
+                name: None,
             }],
             theme: None,
             folder_groups: vec![],
@@ -799,6 +854,15 @@ mod tests {
         assert!(serde_json::from_str::<SyncStatus>(r#""synced""#).is_ok());
         assert!(serde_json::from_str::<SyncStatus>(r#""updated""#).is_err());
         assert!(serde_json::from_str::<SyncStatus>(r#""up_to_date""#).is_err());
+    }
+
+    #[test]
+    fn creates_only_absolute_directories() {
+        assert!(create_directory("relative".to_owned()).is_err());
+        let temporary = tempfile::tempdir().unwrap();
+        let path = temporary.path().join("new-root");
+        create_directory(path.to_string_lossy().into_owned()).unwrap();
+        assert!(path.is_dir());
     }
 
     #[test]

@@ -3,24 +3,48 @@
   "title": "RepoMirror Configuration",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schemaVersion", "folderGroups", "items"],
+  "required": ["schemaVersion", "rootDirectories", "folderGroups", "items"],
   "properties": {
-    "schemaVersion": { "const": 2 },
-    "rootDirectory": { "type": "string" },
+    "schemaVersion": { "const": 3 },
+    "rootDirectories": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "path"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "path": { "type": "string", "minLength": 1 },
+          "name": { "type": "string" }
+        }
+      }
+    },
     "theme": { "enum": ["light", "dark"] },
-    "folderGroups": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
+    "folderGroups": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["rootId", "path"],
+        "properties": {
+          "rootId": { "type": "string", "minLength": 1 },
+          "path": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
     "items": {
       "type": "array",
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["id", "sourceUrl", "repoUrl", "branch", "sourcePath", "folderGroup", "destinationName", "mirror", "lastStatus", "lastSyncedAt", "lastCommit", "lastMessage"],
+        "required": ["id", "sourceUrl", "repoUrl", "rootId", "folderGroup", "destinationName", "mirror", "lastStatus"],
         "properties": {
           "id": { "type": "string", "minLength": 1 },
           "sourceUrl": { "type": "string", "format": "uri" },
           "repoUrl": { "type": "string", "format": "uri" },
           "branch": { "type": ["string", "null"] },
           "sourcePath": { "type": ["string", "null"] },
+          "rootId": { "type": "string", "minLength": 1 },
           "folderGroup": { "type": "string" },
           "destinationName": { "type": "string", "minLength": 1 },
           "mirror": { "type": "boolean" },

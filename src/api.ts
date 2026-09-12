@@ -5,6 +5,9 @@ export const api = {
   loadConfig: () => invoke<AppConfig>("load_config"),
   saveConfig: (config: AppConfig) => invoke<void>("save_config", { config }),
   selectRoot: () => invoke<string | null>("select_root"),
+  selectDirectory: (title: string, directory?: string) =>
+    invoke<string | null>("select_directory", { title, directory: directory ?? null }),
+  createDirectory: (path: string) => invoke<void>("create_directory", { path }),
   importConfig: () => invoke<AppConfig | null>("import_config"),
   exportConfig: (config: AppConfig) => invoke<boolean>("export_config", { config }),
   preview: (item: SyncItem, rootDirectory: string) =>

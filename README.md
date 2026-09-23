@@ -146,7 +146,7 @@ The command first runs the production frontend build and then produces a release
 
 ```text
 src-tauri/target/release/bundle/macos/RepoMirror.app
-src-tauri/target/release/bundle/dmg/RepoMirror_0.3.1_<architecture>.dmg
+src-tauri/target/release/bundle/dmg/RepoMirror_0.3.2_<architecture>.dmg
 ```
 
 On an Apple Silicon Mac, `<architecture>` is `aarch64`; on an Intel Mac, it is `x64`. The `.app` bundle can run directly, while the `.dmg` is the convenient distribution installer: open it and drag `RepoMirror.app` into Applications. Builds are not code-signed or notarized by this repository, so macOS may require an explicit first-run approval when distributing the app outside the development machine.

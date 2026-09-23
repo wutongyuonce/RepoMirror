@@ -1,6 +1,6 @@
 {
   "name": "repo-mirror",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "Mirror GitHub repositories and repository folders into local directory trees.",
   "license": "MIT",
   "type": "module",

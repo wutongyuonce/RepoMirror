@@ -146,7 +146,7 @@ pnpm tauri build
 
 ```text
 src-tauri/target/release/bundle/macos/RepoMirror.app
-src-tauri/target/release/bundle/dmg/RepoMirror_0.3.1_<architecture>.dmg
+src-tauri/target/release/bundle/dmg/RepoMirror_0.3.2_<architecture>.dmg
 ```
 
 在 Apple Silicon Mac 上，`<architecture>` 为 `aarch64`；在 Intel Mac 上则为 `x64`。`.app` 可以直接运行；`.dmg` 则适合分发，打开后将 `RepoMirror.app` 拖入“应用程序”即可。本仓库的构建未进行代码签名或公证，因此在开发机以外分发时，macOS 首次运行可能要求用户明确允许打开。

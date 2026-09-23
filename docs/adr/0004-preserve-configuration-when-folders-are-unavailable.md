@@ -1,0 +1,3 @@
+# Preserve configuration when folders are unavailable
+
+RepoMirror treats its saved configuration as durable intent, independent of whether its Root Directories currently exist. Loading or importing may accept an absent Root Directory; synchronization creates it only after preview and confirmation, while relinking lets the user point at a folder moved outside the app. Reading an unsupported version or invalid file reports an error and leaves the original file untouched. This replaces the version-2 deletion decision in ADR-0003: preserving recoverable user data outweighs automatically resetting a pre-release format.

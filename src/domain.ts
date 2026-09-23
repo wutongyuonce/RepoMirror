@@ -36,8 +36,9 @@ export interface AppConfig {
 }
 
 export interface PreviewChange {
-  kind: "add" | "modify" | "delete";
+  kind: "add" | "modify" | "delete" | "create_directory";
   path: string;
+  localFingerprint?: string;
 }
 
 export interface SyncPreview {

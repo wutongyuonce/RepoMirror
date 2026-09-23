@@ -1,0 +1,3 @@
+# Revalidate preview before synchronization
+
+A confirmation authorizes the Source commit and file changes shown in its preview. For local files that would be replaced or removed, the preview also records a SHA-256 content fingerprint. RepoMirror obtains the Source again when synchronization starts and rejects the item if its commit, change list, or affected local content differs, rather than applying an unseen update. Destination symlinks and file-versus-directory conflicts are rejected before preview or writes because silently following links or replacing directories can affect files outside the confirmed changes.

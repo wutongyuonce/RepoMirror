@@ -1,13 +1,15 @@
 use chrono::Utc;
 use rfd::FileDialog;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, HashSet},
     ffi::OsStr,
     fs,
-    io::{self, Read},
+    io::{self, Read, Write},
     path::{Component, Path, PathBuf},
     process::Command,
+    sync::Mutex,
 };
 use tauri::{AppHandle, Manager};
 use tempfile::TempDir;
@@ -15,12 +17,13 @@ use url::Url;
 use walkdir::WalkDir;
 
 const CONFIG_SCHEMA_VERSION: u8 = 3;
+static CONFIG_WRITE_LOCK: Mutex<()> = Mutex::new(());
 
 fn default_schema_version() -> u8 {
     CONFIG_SCHEMA_VERSION
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct AppConfig {
     #[serde(default = "default_schema_version")]
@@ -43,7 +46,7 @@ impl Default for AppConfig {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct RootDirectory {
     id: String,
@@ -51,14 +54,28 @@ struct RootDirectory {
     name: Option<String>,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct FolderGroup {
     root_id: String,
     path: String,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct DirectoryMove {
+    from: String,
+    to: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct DeleteTarget {
+    root_directory: String,
+    item: SyncItem,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct SyncItem {
     id: String,
@@ -76,14 +93,14 @@ struct SyncItem {
     last_message: Option<String>,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "lowercase")]
 enum Theme {
     Light,
     Dark,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 enum SyncStatus {
     NotSynced,
@@ -91,14 +108,16 @@ enum SyncStatus {
     Failed,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct PreviewChange {
     kind: String,
     path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    local_fingerprint: Option<String>,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct SyncPreview {
     commit: String,
@@ -114,18 +133,23 @@ struct PreparedSource {
 #[tauri::command]
 fn load_config(app: AppHandle) -> Result<AppConfig, String> {
     let path = config_path(&app)?;
-    if !path.exists() {
-        return Ok(AppConfig::default());
+    read_config(&path)
+}
+
+fn read_config(path: &Path) -> Result<AppConfig, String> {
+    match fs::symlink_metadata(path) {
+        Ok(_) => {}
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(AppConfig::default()),
+        Err(error) => return Err(format!("无法检查配置文件：{error}")),
     }
-    let file = fs::File::open(&path).map_err(|error| format!("无法读取配置：{error}"))?;
+    let file = fs::File::open(path).map_err(|error| format!("无法读取配置：{error}"))?;
     let value: serde_json::Value =
         serde_json::from_reader(file).map_err(|error| format!("配置文件格式无效：{error}"))?;
     let schema_version = value
         .get("schemaVersion")
         .and_then(serde_json::Value::as_u64);
     if schema_version == Some(2) {
-        fs::remove_file(&path).map_err(|error| format!("无法清除旧版配置：{error}"))?;
-        return Ok(AppConfig::default());
+        return Err("检测到旧版 schemaVersion: 2 配置；原文件已保留，请导入新版配置。".to_owned());
     }
     if schema_version != Some(CONFIG_SCHEMA_VERSION.into()) {
         return Err("配置版本不受支持。".to_owned());
@@ -137,18 +161,181 @@ fn load_config(app: AppHandle) -> Result<AppConfig, String> {
 }
 
 #[tauri::command]
-fn save_config(app: AppHandle, config: AppConfig) -> Result<(), String> {
+fn save_config(
+    app: AppHandle,
+    config: AppConfig,
+    expected_config: Option<AppConfig>,
+) -> Result<(), String> {
+    let _guard = CONFIG_WRITE_LOCK.lock().map_err(|_| "配置写入锁不可用。")?;
     validate_config(&config)?;
     let path = config_path(&app)?;
+    ensure_current_config(&path, expected_config.as_ref())?;
     write_config(&path, &config)
 }
 
+#[tauri::command]
+fn save_config_with_moves(
+    app: AppHandle,
+    config: AppConfig,
+    moves: Vec<DirectoryMove>,
+    expected_config: AppConfig,
+) -> Result<(), String> {
+    let _guard = CONFIG_WRITE_LOCK.lock().map_err(|_| "配置写入锁不可用。")?;
+    let path = config_path(&app)?;
+    ensure_current_config(&path, Some(&expected_config))?;
+    for movement in &moves {
+        validate_managed_move_path(&expected_config, Path::new(&movement.from))?;
+        validate_managed_move_path(&config, Path::new(&movement.to))?;
+    }
+    write_config_with_moves(&path, &config, &moves)
+}
+
+fn validate_managed_move_path(config: &AppConfig, path: &Path) -> Result<(), String> {
+    for root in &config.root_directories {
+        let root_path = Path::new(&root.path);
+        let Ok(relative) = path.strip_prefix(root_path) else {
+            continue;
+        };
+        if relative.as_os_str().is_empty() {
+            return Ok(());
+        }
+        let managed_group = config
+            .folder_groups
+            .iter()
+            .any(|group| group.root_id == root.id && root_path.join(&group.path) == path);
+        let managed_item = config.items.iter().any(|item| {
+            item.root_id == root.id
+                && root_path
+                    .join(&item.folder_group)
+                    .join(&item.destination_name)
+                    == path
+        });
+        if !managed_group && !managed_item {
+            continue;
+        }
+        let mut current = root_path.to_path_buf();
+        for component in relative.components() {
+            current.push(component);
+            match fs::symlink_metadata(&current) {
+                Ok(metadata) if metadata.file_type().is_symlink() => {
+                    return Err(format!("移动路径包含符号链接：{}", current.display()));
+                }
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    return Err(format!("无法检查移动路径 {}：{error}", current.display()))
+                }
+                _ => {}
+            }
+        }
+        return Ok(());
+    }
+    Err(format!("移动路径不属于受管理的文件夹：{}", path.display()))
+}
+
+fn ensure_current_config(path: &Path, expected: Option<&AppConfig>) -> Result<(), String> {
+    if let Some(expected) = expected {
+        let current = read_config(path)?;
+        if &current != expected {
+            return Err("配置已被其他操作修改；请重新打开应用后重试。".to_owned());
+        }
+    }
+    Ok(())
+}
+
+fn write_config_with_moves(
+    path: &Path,
+    config: &AppConfig,
+    moves: &[DirectoryMove],
+) -> Result<(), String> {
+    validate_config(config)?;
+    let mut sources = HashSet::new();
+    let mut targets = HashSet::new();
+    for movement in moves {
+        let from = Path::new(&movement.from);
+        let to = Path::new(&movement.to);
+        if !from.is_absolute() || !to.is_absolute() || from == to || to.starts_with(from) {
+            return Err("本地文件夹移动路径无效。".to_owned());
+        }
+        if !sources.insert(from) || !targets.insert(to) {
+            return Err("本地文件夹移动路径重复。".to_owned());
+        }
+        match fs::symlink_metadata(from) {
+            Ok(metadata) if !metadata.is_dir() || metadata.file_type().is_symlink() => {
+                return Err(format!("原位置不是普通目录：{}", from.display()));
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(format!("无法检查原位置 {}：{error}", from.display())),
+            _ => {}
+        }
+        match fs::symlink_metadata(to) {
+            Ok(_) => return Err(format!("新位置已被占用：{}", to.display())),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(format!("无法检查新位置 {}：{error}", to.display())),
+        }
+    }
+
+    let mut completed: Vec<&DirectoryMove> = Vec::new();
+    for movement in moves {
+        let from = Path::new(&movement.from);
+        if !from.exists() {
+            continue;
+        }
+        let result = if let Some(parent) = Path::new(&movement.to).parent() {
+            fs::create_dir_all(parent).and_then(|_| fs::rename(from, &movement.to))
+        } else {
+            fs::rename(from, &movement.to)
+        };
+        if let Err(error) = result {
+            return Err(rollback_moves(
+                &completed,
+                format!("无法移动本地文件夹 {}：{error}", movement.from),
+            ));
+        }
+        completed.push(movement);
+    }
+    if let Err(error) = write_config(path, config) {
+        return Err(rollback_moves(&completed, error));
+    }
+    Ok(())
+}
+
+fn rollback_moves(completed: &[&DirectoryMove], error: String) -> String {
+    let failures: Vec<_> = completed
+        .iter()
+        .rev()
+        .filter_map(|movement| {
+            fs::rename(&movement.to, &movement.from)
+                .err()
+                .map(|cause| format!("{} → {}：{cause}", movement.to, movement.from))
+        })
+        .collect();
+    if failures.is_empty() {
+        format!("{error}。配置未更新，已还原本地文件夹。")
+    } else {
+        format!(
+            "{error}。配置未更新，但以下文件夹还原失败，请手动检查：{}",
+            failures.join("；")
+        )
+    }
+}
+
 fn write_config(path: &Path, config: &AppConfig) -> Result<(), String> {
-    let temporary = path.with_extension("json.tmp");
     let json =
         serde_json::to_vec_pretty(&config).map_err(|error| format!("无法序列化配置：{error}"))?;
-    fs::write(&temporary, json).map_err(|error| format!("无法写入配置：{error}"))?;
-    fs::rename(&temporary, &path).map_err(|error| format!("无法保存配置：{error}"))
+    let parent = path.parent().ok_or("配置路径无效。")?;
+    let mut temporary = tempfile::NamedTempFile::new_in(parent)
+        .map_err(|error| format!("无法创建临时配置：{error}"))?;
+    temporary
+        .write_all(&json)
+        .map_err(|error| format!("无法写入配置：{error}"))?;
+    temporary
+        .as_file()
+        .sync_all()
+        .map_err(|error| format!("无法保存配置：{error}"))?;
+    temporary
+        .persist(path)
+        .map_err(|error| format!("无法替换配置：{}", error.error))?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -166,18 +353,6 @@ fn select_directory(title: String, directory: Option<String>) -> Option<String> 
         .pick_folder()
         .and_then(|path| fs::canonicalize(path).ok())
         .map(|path| path.to_string_lossy().into_owned())
-}
-
-#[tauri::command]
-fn create_directory(path: String) -> Result<(), String> {
-    let directory = PathBuf::from(&path);
-    if !directory.is_absolute() {
-        return Err("只能创建绝对路径目录。".to_owned());
-    }
-    if directory.exists() && !directory.is_dir() {
-        return Err(format!("不是目录：{path}"));
-    }
-    fs::create_dir_all(&directory).map_err(|error| format!("无法创建目录 {path}：{error}"))
 }
 
 #[tauri::command]
@@ -220,7 +395,8 @@ fn import_config() -> Result<Option<AppConfig>, String> {
 }
 
 #[tauri::command]
-fn export_config(config: AppConfig) -> Result<bool, String> {
+fn export_config(app: AppHandle) -> Result<bool, String> {
+    let config = read_config(&config_path(&app)?)?;
     let Some(path) = FileDialog::new()
         .set_title("导出 RepoMirror 配置")
         .set_file_name("repo-mirror-config.json")
@@ -236,7 +412,12 @@ fn export_config(config: AppConfig) -> Result<bool, String> {
 }
 
 #[tauri::command]
-async fn preview_sync(item: SyncItem, root_directory: String) -> Result<SyncPreview, String> {
+async fn preview_sync(
+    app: AppHandle,
+    item: SyncItem,
+    root_directory: String,
+) -> Result<SyncPreview, String> {
+    ensure_saved_item(&app, &item, &root_directory)?;
     tauri::async_runtime::spawn_blocking(move || {
         let prepared = prepare_source(&item)?;
         let destination = destination_path(&root_directory, &item)?;
@@ -250,10 +431,21 @@ async fn preview_sync(item: SyncItem, root_directory: String) -> Result<SyncPrev
 }
 
 #[tauri::command]
-async fn sync_item(item: SyncItem, root_directory: String) -> Result<SyncItem, String> {
+async fn sync_item(
+    app: AppHandle,
+    item: SyncItem,
+    root_directory: String,
+    expected_preview: SyncPreview,
+) -> Result<SyncItem, String> {
+    ensure_saved_item(&app, &item, &root_directory)?;
     tauri::async_runtime::spawn_blocking(move || {
         let prepared = prepare_source(&item)?;
         let destination = destination_path(&root_directory, &item)?;
+        let actual_preview = SyncPreview {
+            commit: prepared.commit.clone(),
+            changes: compare_trees(&prepared.source, &destination, item.mirror)?,
+        };
+        ensure_preview_matches(&expected_preview, &actual_preview)?;
         let mut updated = item;
         apply_sync(&prepared.source, &destination, updated.mirror)?;
         updated.last_status = SyncStatus::Synced;
@@ -264,6 +456,30 @@ async fn sync_item(item: SyncItem, root_directory: String) -> Result<SyncItem, S
     })
     .await
     .map_err(|error| format!("同步任务意外中断：{error}"))?
+}
+
+fn ensure_saved_item(app: &AppHandle, item: &SyncItem, root_directory: &str) -> Result<(), String> {
+    let config = read_config(&config_path(app)?)?;
+    let saved = config
+        .items
+        .iter()
+        .find(|candidate| candidate.id == item.id);
+    let root = config
+        .root_directories
+        .iter()
+        .find(|candidate| candidate.id == item.root_id);
+    if saved != Some(item) || root.map(|directory| directory.path.as_str()) != Some(root_directory)
+    {
+        return Err("同步项配置已变化；请重新打开或重新预览后再试。".to_owned());
+    }
+    Ok(())
+}
+
+fn ensure_preview_matches(expected: &SyncPreview, actual: &SyncPreview) -> Result<(), String> {
+    if expected != actual {
+        return Err("来源或本地文件已变化，预览已过期；请重新预览后再同步。".to_owned());
+    }
+    Ok(())
 }
 
 fn config_path(app: &AppHandle) -> Result<PathBuf, String> {
@@ -281,6 +497,11 @@ fn validate_relative_path(value: &str) -> Result<(), String> {
     }
     let path = Path::new(value);
     if path.is_absolute()
+        || value.contains('\\')
+        || value.contains('\0')
+        || value
+            .split('/')
+            .any(|part| part.is_empty() || part == "." || part == "..")
         || path.components().any(|component| {
             matches!(
                 component,
@@ -306,13 +527,13 @@ fn validate_config(config: &AppConfig) -> Result<(), String> {
         if root.id.trim().is_empty() || !roots.insert(root.id.clone()) {
             return Err("每个根目录必须有唯一且非空的 id。".to_owned());
         }
-        let canonical = fs::canonicalize(&root.path)
-            .map_err(|_| format!("根目录不存在或无法访问：{}", root.path))?;
-        if !canonical.is_dir() || !root_paths.insert(canonical.clone()) {
+        let canonical = canonical_root_path(&root.path)?;
+        if !root_paths.insert(canonical.clone()) {
             return Err("根目录重复或不是目录。".to_owned());
         }
         if root_paths.iter().any(|existing| {
-            existing != &canonical && (existing.starts_with(&canonical) || canonical.starts_with(existing))
+            existing != &canonical
+                && (existing.starts_with(&canonical) || canonical.starts_with(existing))
         }) {
             return Err("根目录不能位于另一个根目录之内。".to_owned());
         }
@@ -383,11 +604,54 @@ fn validate_config(config: &AppConfig) -> Result<(), String> {
     Ok(())
 }
 
+fn canonical_root_path(value: &str) -> Result<PathBuf, String> {
+    let path = Path::new(value);
+    if !path.is_absolute()
+        || path
+            .components()
+            .any(|part| matches!(part, Component::ParentDir))
+    {
+        return Err(format!("根目录必须是规范的绝对路径：{value}"));
+    }
+
+    let mut existing = path;
+    let mut missing = Vec::new();
+    loop {
+        match fs::canonicalize(existing) {
+            Ok(mut canonical) => {
+                if !canonical.is_dir() {
+                    return Err(format!("根目录或其上级路径不是目录：{value}"));
+                }
+                for component in missing.iter().rev() {
+                    canonical.push(component);
+                }
+                return Ok(canonical);
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                if fs::symlink_metadata(existing).is_ok() {
+                    return Err(format!("根目录路径包含失效的符号链接：{value}"));
+                }
+                let name = existing
+                    .file_name()
+                    .ok_or_else(|| format!("无法访问根目录路径：{value}"))?;
+                missing.push(name.to_os_string());
+                existing = existing
+                    .parent()
+                    .ok_or_else(|| format!("无法访问根目录路径：{value}"))?;
+            }
+            Err(error) => return Err(format!("无法访问根目录路径 {value}：{error}")),
+        }
+    }
+}
+
 fn validate_source(item: &SyncItem) -> Result<(), String> {
     let source_url =
         Url::parse(&item.source_url).map_err(|_| "sourceUrl 必须是有效 URL。".to_owned())?;
     if source_url.scheme() != "https"
         || source_url.host_str() != Some("github.com")
+        || !source_url.username().is_empty()
+        || source_url.password().is_some()
+        || source_url.port().is_some()
         || source_url.query().is_some()
         || source_url.fragment().is_some()
     {
@@ -404,7 +668,14 @@ fn validate_source(item: &SyncItem) -> Result<(), String> {
     }
 
     let repo_url = Url::parse(&item.repo_url).map_err(|_| "repoUrl 必须是有效 URL。".to_owned())?;
-    if repo_url.scheme() != "https" || repo_url.host_str() != Some("github.com") {
+    if repo_url.scheme() != "https"
+        || repo_url.host_str() != Some("github.com")
+        || !repo_url.username().is_empty()
+        || repo_url.password().is_some()
+        || repo_url.port().is_some()
+        || repo_url.query().is_some()
+        || repo_url.fragment().is_some()
+    {
         return Err("repoUrl 必须是 https://github.com 地址。".to_owned());
     }
     let repo_parts: Vec<_> = repo_url
@@ -422,9 +693,13 @@ fn validate_source(item: &SyncItem) -> Result<(), String> {
     match (&item.branch, &item.source_path) {
         (None, None) if source_is_repo => Ok(()),
         (Some(branch), Some(path)) if source_is_folder => {
-            if branch.trim().is_empty()
-                || branch != source_parts[3]
-                || path != &source_parts[4..].join("/")
+            let branch_parts: Vec<_> = branch.split('/').collect();
+            if branch_parts
+                .iter()
+                .any(|part| part.is_empty() || *part == "." || *part == "..")
+                || source_parts[3..].len() <= branch_parts.len()
+                || source_parts[3..3 + branch_parts.len()] != branch_parts
+                || path != &source_parts[3 + branch_parts.len()..].join("/")
             {
                 return Err("branch 和 sourcePath 必须与 sourceUrl 的目录链接一致。".to_owned());
             }
@@ -449,45 +724,57 @@ fn validate_name(value: &str) -> Result<(), String> {
 fn destination_path(root_directory: &str, item: &SyncItem) -> Result<PathBuf, String> {
     validate_relative_path(&item.folder_group)?;
     validate_name(&item.destination_name)?;
-    let root = PathBuf::from(root_directory);
-    if !root.is_absolute() {
-        return Err("根目录必须是绝对路径。".to_owned());
-    }
-    Ok(root.join(&item.folder_group).join(&item.destination_name))
-}
-
-#[tauri::command]
-fn delete_directories(paths: Vec<String>) -> Result<(), String> {
-    for path in paths {
-        let directory = PathBuf::from(&path);
-        if !directory.is_absolute() {
-            return Err("只能删除绝对路径目录。".to_owned());
-        }
-        if directory.exists() {
-            if !directory.is_dir() {
-                return Err(format!("不是目录：{path}"));
+    let root = canonical_root_path(root_directory)?;
+    let destination = root.join(&item.folder_group).join(&item.destination_name);
+    let mut segment_path = root.clone();
+    for segment in Path::new(&item.folder_group)
+        .join(&item.destination_name)
+        .components()
+    {
+        segment_path.push(segment);
+        match fs::symlink_metadata(&segment_path) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                return Err(format!("目标路径包含符号链接：{}", segment_path.display()));
             }
-            fs::remove_dir_all(&directory)
-                .map_err(|error| format!("无法删除目录 {path}：{error}"))?;
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(format!("无法检查目标路径：{error}")),
+            _ => {}
         }
     }
-    Ok(())
+    let resolved = canonical_root_path(&destination.to_string_lossy())?;
+    if !resolved.starts_with(&root) {
+        return Err("目标路径通过符号链接离开了根目录。".to_owned());
+    }
+    Ok(destination)
 }
 
 #[tauri::command]
-fn move_directory(from: String, to: String) -> Result<(), String> {
-    let source = PathBuf::from(&from);
-    let destination = PathBuf::from(&to);
-    if !source.is_absolute() || !destination.is_absolute() || !source.is_dir() {
-        return Err("本地目标目录无效。".to_owned());
+fn delete_destinations(targets: Vec<DeleteTarget>) -> Result<(), String> {
+    let mut directories = Vec::new();
+    for target in targets {
+        let directory = destination_path(&target.root_directory, &target.item)?;
+        match fs::symlink_metadata(&directory) {
+            Ok(metadata) if !metadata.is_dir() || metadata.file_type().is_symlink() => {
+                return Err(format!("不是普通目录：{}", directory.display()));
+            }
+            Ok(_) => directories.push(directory),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(format!("无法检查目录 {}：{error}", directory.display())),
+        }
     }
-    if destination.exists() {
-        return Err("新位置已有同名本地文件夹，无法移动。".to_owned());
+    let failures: Vec<_> = directories
+        .into_iter()
+        .filter_map(|directory| {
+            fs::remove_dir_all(&directory)
+                .err()
+                .map(|error| format!("{}：{error}", directory.display()))
+        })
+        .collect();
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(format!("以下本地目录未能删除：{}", failures.join("；")))
     }
-    if let Some(parent) = destination.parent() {
-        fs::create_dir_all(parent).map_err(|error| format!("无法创建新位置：{error}"))?;
-    }
-    fs::rename(&source, &destination).map_err(|error| format!("无法移动本地目标目录：{error}"))
 }
 
 #[tauri::command]
@@ -578,6 +865,7 @@ fn compare_trees(
     mirror: bool,
 ) -> Result<Vec<PreviewChange>, String> {
     let source_files = collect_files(source)?;
+    validate_destination_tree(destination, &source_files)?;
     let destination_files = collect_files(destination)?;
     let mut changes = Vec::new();
 
@@ -587,50 +875,57 @@ fn compare_trees(
             None => changes.push(PreviewChange {
                 kind: "add".to_owned(),
                 path,
+                local_fingerprint: None,
             }),
             Some(destination_file) if !files_equal(source_file, destination_file)? => {
                 changes.push(PreviewChange {
                     kind: "modify".to_owned(),
                     path,
+                    local_fingerprint: Some(file_fingerprint(destination_file)?),
                 })
             }
             _ => {}
         }
     }
     if mirror {
-        for relative in destination_files
-            .keys()
-            .filter(|relative| !source_files.contains_key(*relative))
+        for (relative, destination_file) in destination_files
+            .iter()
+            .filter(|(relative, _)| !source_files.contains_key(*relative))
         {
             changes.push(PreviewChange {
                 kind: "delete".to_owned(),
                 path: display_path(relative),
+                local_fingerprint: Some(file_fingerprint(destination_file)?),
             });
         }
+    }
+    if changes.is_empty() && !destination.exists() {
+        changes.push(PreviewChange {
+            kind: "create_directory".to_owned(),
+            path: ".".to_owned(),
+            local_fingerprint: None,
+        });
     }
     changes.sort_by(|left, right| left.path.cmp(&right.path));
     Ok(changes)
 }
 
 fn apply_sync(source: &Path, destination: &Path, mirror: bool) -> Result<(), String> {
-    fs::create_dir_all(destination).map_err(|error| format!("无法创建目标目录：{error}"))?;
     let source_files = collect_files(source)?;
+    validate_destination_tree(destination, &source_files)?;
+    fs::create_dir_all(destination).map_err(|error| format!("无法创建目标目录：{error}"))?;
     let destination_files = collect_files(destination)?;
 
     for (relative, source_file) in &source_files {
-        let target = destination.join(&relative);
+        let target = destination.join(relative);
         if let Some(parent) = target.parent() {
             fs::create_dir_all(parent).map_err(|error| format!("无法创建目标父目录：{error}"))?;
         }
         let needs_copy = match destination_files.get(relative) {
-            Some(existing) => !files_equal(&source_file, existing)?,
+            Some(existing) => !files_equal(source_file, existing)?,
             None => true,
         };
         if needs_copy {
-            if target.is_dir() {
-                fs::remove_dir_all(&target)
-                    .map_err(|error| format!("无法替换目标目录：{error}"))?;
-            }
             fs::copy(source_file, &target).map_err(|error| format!("无法写入目标文件：{error}"))?;
         }
     }
@@ -645,7 +940,43 @@ fn apply_sync(source: &Path, destination: &Path, mirror: bool) -> Result<(), Str
                 fs::remove_file(&target).map_err(|error| format!("无法移除过期文件：{error}"))?;
             }
         }
-        remove_empty_directories(destination)?;
+    }
+    Ok(())
+}
+
+fn validate_destination_tree(
+    source_root: &Path,
+    source_files: &BTreeMap<PathBuf, PathBuf>,
+) -> Result<(), String> {
+    match fs::symlink_metadata(source_root) {
+        Ok(metadata) if !metadata.is_dir() || metadata.file_type().is_symlink() => {
+            return Err(format!("目标不是普通目录：{}", source_root.display()));
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(format!("无法检查目标目录：{error}")),
+        _ => {}
+    }
+    for entry in WalkDir::new(source_root).follow_links(false).into_iter() {
+        let entry = entry.map_err(|error| format!("无法检查目标目录：{error}"))?;
+        if entry.file_type().is_symlink() {
+            return Err(format!("目标目录包含符号链接：{}", entry.path().display()));
+        }
+    }
+    for relative in source_files.keys() {
+        let target = source_root.join(relative);
+        if target.is_dir() {
+            return Err(format!("来源文件与本地目录冲突：{}", target.display()));
+        }
+        let mut parent = target.parent();
+        while let Some(path) = parent {
+            if path == source_root {
+                break;
+            }
+            if path.is_file() {
+                return Err(format!("来源目录与本地文件冲突：{}", path.display()));
+            }
+            parent = path.parent();
+        }
     }
     Ok(())
 }
@@ -661,6 +992,12 @@ fn collect_files(root: &Path) -> Result<BTreeMap<PathBuf, PathBuf>, String> {
         .filter_entry(|entry| !should_ignore(entry.path(), root))
     {
         let entry = entry.map_err(|error| format!("无法读取目录：{error}"))?;
+        if entry.file_type().is_symlink() {
+            return Err(format!(
+                "目录包含暂不支持同步的符号链接：{}",
+                entry.path().display()
+            ));
+        }
         if entry.file_type().is_file() {
             let relative = entry
                 .path()
@@ -716,24 +1053,20 @@ fn files_equal(left: &Path, right: &Path) -> Result<bool, String> {
     }
 }
 
-fn remove_empty_directories(root: &Path) -> Result<(), String> {
-    let mut directories: Vec<PathBuf> = WalkDir::new(root)
-        .min_depth(1)
-        .follow_links(false)
-        .into_iter()
-        .filter_map(Result::ok)
-        .filter(|entry| entry.file_type().is_dir() && !should_ignore(entry.path(), root))
-        .map(|entry| entry.into_path())
-        .collect();
-    directories.sort_by_key(|path| std::cmp::Reverse(path.components().count()));
-    for directory in directories {
-        match fs::remove_dir(&directory) {
-            Ok(()) => {}
-            Err(error) if error.kind() == io::ErrorKind::DirectoryNotEmpty => {}
-            Err(error) => return Err(format!("无法清理空目录：{error}")),
+fn file_fingerprint(path: &Path) -> Result<String, String> {
+    let mut file = fs::File::open(path).map_err(|error| format!("无法读取本地文件：{error}"))?;
+    let mut hash = Sha256::new();
+    let mut buffer = [0; 8192];
+    loop {
+        let count = file
+            .read(&mut buffer)
+            .map_err(|error| format!("无法计算本地文件指纹：{error}"))?;
+        if count == 0 {
+            break;
         }
+        hash.update(&buffer[..count]);
     }
-    Ok(())
+    Ok(format!("{:x}", hash.finalize()))
 }
 
 fn display_path(path: &Path) -> String {
@@ -745,15 +1078,14 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             load_config,
             save_config,
+            save_config_with_moves,
             select_root,
             select_directory,
-            create_directory,
             import_config,
             export_config,
             preview_sync,
             sync_item,
-            delete_directories,
-            move_directory,
+            delete_destinations,
             directory_exists,
             open_directory
         ])
@@ -800,6 +1132,59 @@ mod tests {
     }
 
     #[test]
+    fn accepts_a_missing_root_and_sync_creates_it() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join("moved-root");
+        let config = AppConfig {
+            schema_version: CONFIG_SCHEMA_VERSION,
+            root_directories: vec![RootDirectory {
+                id: "root".to_owned(),
+                path: root.to_string_lossy().into_owned(),
+                name: None,
+            }],
+            theme: None,
+            folder_groups: vec![],
+            items: vec![repository_item()],
+        };
+
+        assert!(!root.exists());
+        validate_config(&config).unwrap();
+        assert!(
+            !root.exists(),
+            "loading configuration must not create folders"
+        );
+
+        let source = temporary.path().join("source");
+        fs::create_dir(&source).unwrap();
+        fs::write(source.join("item.txt"), "contents").unwrap();
+        let destination =
+            destination_path(&config.root_directories[0].path, &config.items[0]).unwrap();
+        assert_eq!(compare_trees(&source, &destination, true).unwrap().len(), 1);
+        assert!(!root.exists(), "preview must not create folders");
+        apply_sync(&source, &destination, true).unwrap();
+        assert_eq!(
+            fs::read_to_string(destination.join("item.txt")).unwrap(),
+            "contents"
+        );
+    }
+
+    #[test]
+    fn empty_source_still_previews_and_creates_a_missing_destination() {
+        let temporary = tempfile::tempdir().unwrap();
+        let source = temporary.path().join("source");
+        let destination = temporary.path().join("root/group/item");
+        fs::create_dir(&source).unwrap();
+        let changes = compare_trees(&source, &destination, true).unwrap();
+        assert_eq!(changes.len(), 1);
+        assert_eq!(changes[0].kind, "create_directory");
+        apply_sync(&source, &destination, true).unwrap();
+        assert!(destination.is_dir());
+        assert!(compare_trees(&source, &destination, true)
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
     fn rejects_a_root_nested_inside_another_root() {
         let temporary = tempfile::tempdir().unwrap();
         let child = temporary.path().join("nested");
@@ -826,6 +1211,43 @@ mod tests {
     }
 
     #[test]
+    fn rejects_a_missing_root_nested_inside_another_root() {
+        let temporary = tempfile::tempdir().unwrap();
+        let config = AppConfig {
+            schema_version: CONFIG_SCHEMA_VERSION,
+            root_directories: vec![
+                RootDirectory {
+                    id: "outer".to_owned(),
+                    path: temporary.path().to_string_lossy().into_owned(),
+                    name: None,
+                },
+                RootDirectory {
+                    id: "inner".to_owned(),
+                    path: temporary
+                        .path()
+                        .join("future/nested")
+                        .to_string_lossy()
+                        .into_owned(),
+                    name: None,
+                },
+            ],
+            theme: None,
+            folder_groups: vec![],
+            items: vec![],
+        };
+        assert!(validate_config(&config).is_err());
+        assert!(!temporary.path().join("future").exists());
+    }
+
+    #[test]
+    fn rejects_a_missing_root_below_a_file() {
+        let temporary = tempfile::tempdir().unwrap();
+        let file = temporary.path().join("file");
+        fs::write(&file, "contents").unwrap();
+        assert!(canonical_root_path(&file.join("child").to_string_lossy()).is_err());
+    }
+
+    #[test]
     fn rejects_a_source_that_does_not_match_its_repository() {
         let mut item = repository_item();
         item.repo_url = "https://github.com/example/other.git".to_owned();
@@ -844,6 +1266,56 @@ mod tests {
     }
 
     #[test]
+    fn rejects_repository_urls_with_credentials_or_query_parameters() {
+        let mut item = repository_item();
+        item.repo_url = "https://user:secret@github.com/example/plugin.git".to_owned();
+        assert!(validate_source(&item).is_err());
+        item.repo_url = "https://github.com/example/plugin.git?other=true".to_owned();
+        assert!(validate_source(&item).is_err());
+    }
+
+    #[test]
+    fn accepts_an_explicit_slash_named_branch() {
+        let mut item = repository_item();
+        item.source_url =
+            "https://github.com/example/plugin/tree/feature/new-ui/packages/tool".to_owned();
+        item.branch = Some("feature/new-ui".to_owned());
+        item.source_path = Some("packages/tool".to_owned());
+        assert!(validate_source(&item).is_ok());
+        item.branch = Some("feature".to_owned());
+        assert!(validate_source(&item).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn deletion_rejects_a_symlink_before_removing_any_directory() {
+        use std::os::unix::fs::symlink;
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join("root");
+        let ordinary = root.join("ordinary");
+        let linked = root.join("linked");
+        fs::create_dir(&root).unwrap();
+        fs::create_dir(&ordinary).unwrap();
+        symlink(&ordinary, &linked).unwrap();
+        let mut ordinary_item = repository_item();
+        ordinary_item.destination_name = "ordinary".to_owned();
+        let mut linked_item = repository_item();
+        linked_item.destination_name = "linked".to_owned();
+        assert!(delete_destinations(vec![
+            DeleteTarget {
+                root_directory: root.to_string_lossy().into_owned(),
+                item: ordinary_item
+            },
+            DeleteTarget {
+                root_directory: root.to_string_lossy().into_owned(),
+                item: linked_item
+            },
+        ])
+        .is_err());
+        assert!(ordinary.is_dir());
+    }
+
+    #[test]
     fn rejects_unknown_configuration_fields() {
         let json = r#"{"schemaVersion":3,"rootDirectories":[],"folderGroups":[],"items":[],"unexpected":true}"#;
         assert!(serde_json::from_str::<AppConfig>(json).is_err());
@@ -857,34 +1329,256 @@ mod tests {
     }
 
     #[test]
-    fn creates_only_absolute_directories() {
-        assert!(create_directory("relative".to_owned()).is_err());
+    fn preserves_unsupported_saved_configuration() {
         let temporary = tempfile::tempdir().unwrap();
-        let path = temporary.path().join("new-root");
-        create_directory(path.to_string_lossy().into_owned()).unwrap();
-        assert!(path.is_dir());
+        let path = temporary.path().join("config.json");
+        let original = br#"{"schemaVersion":2,"items":[{"id":"saved"}]}"#;
+        fs::write(&path, original).unwrap();
+        assert!(read_config(&path).is_err());
+        assert_eq!(fs::read(&path).unwrap(), original);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn broken_config_symlink_is_an_error_instead_of_an_empty_configuration() {
+        use std::os::unix::fs::symlink;
+        let temporary = tempfile::tempdir().unwrap();
+        let path = temporary.path().join("config.json");
+        symlink(temporary.path().join("missing.json"), &path).unwrap();
+        assert!(read_config(&path).is_err());
+        assert!(fs::symlink_metadata(&path)
+            .unwrap()
+            .file_type()
+            .is_symlink());
     }
 
     #[test]
-    fn moves_a_destination_without_overwriting_an_existing_directory() {
+    fn rejects_equivalent_non_normalized_group_paths() {
+        for path in ["a//b", "a/b/", "a/./b", "a/../b", "a\\b"] {
+            assert!(validate_relative_path(path).is_err(), "{path}");
+        }
+    }
+
+    #[test]
+    fn rejects_stale_source_or_local_preview() {
+        let expected = SyncPreview {
+            commit: "first".to_owned(),
+            changes: vec![PreviewChange {
+                kind: "add".to_owned(),
+                path: "a".to_owned(),
+                local_fingerprint: None,
+            }],
+        };
+        let mut actual = expected.clone();
+        assert!(ensure_preview_matches(&expected, &actual).is_ok());
+        actual.commit = "second".to_owned();
+        assert!(ensure_preview_matches(&expected, &actual).is_err());
+        actual.commit = expected.commit.clone();
+        actual.changes.clear();
+        assert!(ensure_preview_matches(&expected, &actual).is_err());
+    }
+
+    #[test]
+    fn changing_an_already_modified_local_file_expires_its_preview() {
         let temporary = tempfile::tempdir().unwrap();
         let source = temporary.path().join("source");
-        let destination = temporary.path().join("nested/destination");
+        let destination = temporary.path().join("destination");
         fs::create_dir(&source).unwrap();
-        fs::write(source.join("item.txt"), "contents").unwrap();
+        fs::create_dir(&destination).unwrap();
+        fs::write(source.join("item.txt"), "remote").unwrap();
+        fs::write(destination.join("item.txt"), "local-one").unwrap();
+        let expected = SyncPreview {
+            commit: "same-commit".to_owned(),
+            changes: compare_trees(&source, &destination, true).unwrap(),
+        };
+        fs::write(destination.join("item.txt"), "local-two").unwrap();
+        let actual = SyncPreview {
+            commit: "same-commit".to_owned(),
+            changes: compare_trees(&source, &destination, true).unwrap(),
+        };
+        assert_eq!(expected.changes[0].kind, actual.changes[0].kind);
+        assert_eq!(expected.changes[0].path, actual.changes[0].path);
+        assert!(ensure_preview_matches(&expected, &actual).is_err());
+    }
 
-        move_directory(
-            source.to_string_lossy().into_owned(),
-            destination.to_string_lossy().into_owned(),
+    #[test]
+    fn non_mirror_sync_does_not_remove_a_conflicting_local_directory() {
+        let temporary = tempfile::tempdir().unwrap();
+        let source = temporary.path().join("source");
+        let destination = temporary.path().join("destination");
+        fs::create_dir(&source).unwrap();
+        fs::create_dir_all(destination.join("entry")).unwrap();
+        fs::write(source.join("entry"), "remote").unwrap();
+        fs::write(destination.join("entry/local.txt"), "local").unwrap();
+        assert!(compare_trees(&source, &destination, false).is_err());
+        assert!(apply_sync(&source, &destination, false).is_err());
+        assert_eq!(
+            fs::read_to_string(destination.join("entry/local.txt")).unwrap(),
+            "local"
+        );
+    }
+
+    #[test]
+    fn mirror_sync_keeps_unpreviewed_empty_directories() {
+        let temporary = tempfile::tempdir().unwrap();
+        let source = temporary.path().join("source");
+        let destination = temporary.path().join("destination");
+        fs::create_dir(&source).unwrap();
+        fs::create_dir_all(destination.join("empty-local")).unwrap();
+        fs::write(source.join("new.txt"), "remote").unwrap();
+        assert_eq!(compare_trees(&source, &destination, true).unwrap().len(), 1);
+        apply_sync(&source, &destination, true).unwrap();
+        assert!(destination.join("empty-local").is_dir());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rejects_destination_symlink_without_writing_outside_it() {
+        use std::os::unix::fs::symlink;
+        let temporary = tempfile::tempdir().unwrap();
+        let source = temporary.path().join("source");
+        let destination = temporary.path().join("destination");
+        let outside = temporary.path().join("outside.txt");
+        fs::create_dir(&source).unwrap();
+        fs::create_dir(&destination).unwrap();
+        fs::write(source.join("entry"), "remote").unwrap();
+        fs::write(&outside, "local").unwrap();
+        symlink(&outside, destination.join("entry")).unwrap();
+        assert!(compare_trees(&source, &destination, true).is_err());
+        assert!(apply_sync(&source, &destination, true).is_err());
+        assert_eq!(fs::read_to_string(outside).unwrap(), "local");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rejects_a_symlinked_folder_group_outside_the_root() {
+        use std::os::unix::fs::symlink;
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join("root");
+        let outside = temporary.path().join("outside");
+        fs::create_dir(&root).unwrap();
+        fs::create_dir(&outside).unwrap();
+        symlink(&outside, root.join("group")).unwrap();
+        let mut item = repository_item();
+        item.folder_group = "group".to_owned();
+        assert!(destination_path(&root.to_string_lossy(), &item).is_err());
+        assert!(!outside.join("plugin").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn move_rejects_a_symlinked_group_before_touching_its_destination() {
+        use std::os::unix::fs::symlink;
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join("root");
+        let outside = temporary.path().join("outside");
+        fs::create_dir(&root).unwrap();
+        fs::create_dir(&outside).unwrap();
+        fs::create_dir(outside.join("plugin")).unwrap();
+        symlink(&outside, root.join("group")).unwrap();
+        let mut item = repository_item();
+        item.folder_group = "group".to_owned();
+        let config = AppConfig {
+            root_directories: vec![RootDirectory {
+                id: "root".to_owned(),
+                path: root.to_string_lossy().into_owned(),
+                name: None,
+            }],
+            folder_groups: vec![FolderGroup {
+                root_id: "root".to_owned(),
+                path: "group".to_owned(),
+            }],
+            items: vec![item],
+            ..AppConfig::default()
+        };
+        assert!(validate_managed_move_path(&config, &root.join("group/plugin")).is_err());
+        assert!(outside.join("plugin").is_dir());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn preview_reports_unsupported_source_symlinks() {
+        use std::os::unix::fs::symlink;
+        let temporary = tempfile::tempdir().unwrap();
+        let source = temporary.path().join("source");
+        let destination = temporary.path().join("destination");
+        fs::create_dir(&source).unwrap();
+        fs::write(temporary.path().join("outside.txt"), "outside").unwrap();
+        symlink(
+            temporary.path().join("outside.txt"),
+            source.join("linked.txt"),
         )
         .unwrap();
+        assert!(compare_trees(&source, &destination, true).is_err());
+        assert!(!destination.exists());
+    }
 
-        assert!(!source.exists());
-        assert_eq!(fs::read_to_string(destination.join("item.txt")).unwrap(), "contents");
-        assert!(move_directory(
-            destination.to_string_lossy().into_owned(),
-            temporary.path().join("nested").to_string_lossy().into_owned(),
+    #[test]
+    fn restores_a_moved_folder_when_config_write_fails() {
+        let temporary = tempfile::tempdir().unwrap();
+        let from = temporary.path().join("from");
+        let to = temporary.path().join("to");
+        fs::create_dir(&from).unwrap();
+        fs::write(from.join("item.txt"), "local").unwrap();
+        let config = AppConfig::default();
+        let path = temporary.path().join("missing-parent/config.json");
+        let result = write_config_with_moves(
+            &path,
+            &config,
+            &[DirectoryMove {
+                from: from.to_string_lossy().into_owned(),
+                to: to.to_string_lossy().into_owned(),
+            }],
+        );
+        assert!(result.is_err());
+        assert_eq!(fs::read_to_string(from.join("item.txt")).unwrap(), "local");
+        assert!(!to.exists());
+    }
+
+    #[test]
+    fn moves_a_folder_and_config_together_without_overwriting_a_target() {
+        let temporary = tempfile::tempdir().unwrap();
+        let from = temporary.path().join("source");
+        let to = temporary.path().join("nested/destination");
+        let path = temporary.path().join("config.json");
+        fs::create_dir(&from).unwrap();
+        fs::write(from.join("item.txt"), "contents").unwrap();
+        let config = AppConfig::default();
+        write_config_with_moves(
+            &path,
+            &config,
+            &[DirectoryMove {
+                from: from.to_string_lossy().into_owned(),
+                to: to.to_string_lossy().into_owned(),
+            }],
+        )
+        .unwrap();
+        assert!(!from.exists());
+        assert_eq!(fs::read_to_string(to.join("item.txt")).unwrap(), "contents");
+        assert!(read_config(&path).is_ok());
+        fs::create_dir(&from).unwrap();
+        assert!(write_config_with_moves(
+            &path,
+            &config,
+            &[DirectoryMove {
+                from: from.to_string_lossy().into_owned(),
+                to: to.to_string_lossy().into_owned()
+            }]
         )
         .is_err());
+        assert!(from.exists());
+    }
+
+    #[test]
+    fn rejects_a_stale_configuration_before_writing() {
+        let temporary = tempfile::tempdir().unwrap();
+        let path = temporary.path().join("config.json");
+        let original = AppConfig::default();
+        write_config(&path, &original).unwrap();
+        let mut changed = original.clone();
+        changed.theme = Some(Theme::Dark);
+        write_config(&path, &changed).unwrap();
+        assert!(ensure_current_config(&path, Some(&original)).is_err());
+        assert!(ensure_current_config(&path, Some(&changed)).is_ok());
     }
 }

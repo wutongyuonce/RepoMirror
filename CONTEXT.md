@@ -17,8 +17,11 @@ The folder on the local machine whose contents are managed by a Sync Item.
 _Avoid_: Output, install path, target directory
 
 **Root Directory**:
-A user-selected local folder that contains Folder Groups and Destinations. A Sync Item belongs to exactly one Root Directory; its saved path is a canonical absolute path so one physical directory cannot appear as multiple roots through symbolic links. One Root Directory cannot contain another. The interface displays the folder's system name without a separate custom label.
+A saved absolute location for Folder Groups and Destinations. It can be temporarily absent on disk; each Sync Item belongs to exactly one Root Directory, and Root Directories cannot overlap.
 _Avoid_: Default root directory, workspace, library, repository
+
+**Relink Root Directory**:
+Point an existing Root Directory configuration at a folder that was moved outside RepoMirror, retaining its Folder Groups and Sync Items.
 
 **Mirror Sync**:
 A synchronization mode that makes a Destination contain the same files as its Source, including removing files absent from the Source.
@@ -41,19 +44,19 @@ Removal of a Folder Group, all of its descendant Folder Groups, and their Sync I
 Removal of a Root Directory, its descendant Folder Groups, and their Sync Item configurations. Its delete action is sufficient to remove configuration; the user may separately confirm deletion of the affected managed Destinations, but it never deletes the Root Directory itself or unrelated local files within it.
 
 **Destination Name**:
-The final folder name of a Sync Item beneath its Folder Group. It defaults to the Source's repository or directory name and may be customized. If the managed local Destination exists, the user may rename that folder on disk; otherwise only configuration is updated.
+The final folder name of a Sync Item beneath its Folder Group. It defaults to the Source's repository or directory name and may be changed; an existing local Destination follows the new name.
 
 **Move Sync Item**:
-Reassignment of one Sync Item to a Root Directory or Folder Group by dragging it in the interface. Its former Folder Group remains even when empty. The local-folder confirmation appears only when at least one managed Destination exists on disk; otherwise only configuration is updated. A pre-existing folder at the new Destination prevents the local move and is explicitly reported; configuration-only relocation remains available.
+Reassignment of a Sync Item to another Root Directory or Folder Group. Its existing Destination moves with it; an absent Destination remains a saved location for a future sync.
 
 **Move Root Directory**:
-Relocation of a first-level Root Directory by choosing a destination parent folder. The Root Directory keeps its folder name, so the new path is `<parent>/<current folder name>`. Nested Folder Groups do not have this action. If the current local folder exists, the user may move it to the new path; otherwise only the saved path changes. When the destination path does not yet exist and the local folder is not moved, an empty folder is created there so the Root Directory remains valid. A pre-existing folder at the new path prevents the local move.
+Relocation of a Root Directory to a new parent, preserving its folder name. Its local folder moves if present; if absent, the saved location changes without creating a folder.
 
 **Rename Local Folder**:
-When a Root Directory or Folder Group is renamed and the corresponding local folder exists, the user may rename that folder on disk. If it does not exist, only configuration is updated. A pre-existing folder at the new name prevents the local rename.
+Renaming a Root Directory, Folder Group, or Destination changes the saved name and moves the corresponding local folder if present. A name already occupied on disk is a conflict.
 
 **Sync Status**:
-The most recent result recorded for a Sync Item: not synced, synced, or failed. It is stored in configuration and not shown as a list column.
+The most recent result recorded for a Sync Item: not synced, synced, or failed. A failure is marked in the list and its reason is shown in item details; successful syncs show their time.
 
 **Configuration Export**:
 A JSON representation of Root Directories and all saved Sync Items, used for backup and transfer between machines.
@@ -62,7 +65,7 @@ A JSON representation of Root Directories and all saved Sync Items, used for bac
 The `git` executable installed on the user's Mac and used by RepoMirror to retrieve Sources. RepoMirror does not bundle or configure it.
 
 **Sync Preview**:
-An itemized, read-only comparison of a Source and its Destination shown before a Mirror Sync is confirmed. It does not change local files.
+An itemized, read-only comparison of a Source commit and its Destination, shown before synchronization is confirmed. Confirmation applies only while the source commit and listed file changes still match.
 
 **Sync Scope**:
 The set of Sync Items chosen from the currently viewed Root Directory or Folder Group: either that location alone or that location together with all descendant Folder Groups. The user chooses the scope for each batch synchronization; recursive scope is the default.

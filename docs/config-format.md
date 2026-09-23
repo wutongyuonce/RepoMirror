@@ -2,14 +2,14 @@
 
 [中文文档](config-format.zh-CN.md)
 
-RepoMirror imports and exports JSON with `schemaVersion: 3`. Unknown fields are rejected. Version-2 files are discarded rather than migrated.
+RepoMirror imports and exports JSON with `schemaVersion: 3`. Unknown fields are rejected. Version-2 imports are rejected; saved version-2 files are preserved and reported as unsupported.
 
 ## Top-Level Fields
 
 | Field | Type | Rule |
 | --- | --- | --- |
 | `schemaVersion` | number | Must be `3`. |
-| `rootDirectories` | array | Unique `id` values and unique canonical absolute paths. One root cannot contain another. |
+| `rootDirectories` | array | Unique `id` values and non-overlapping effective absolute paths. Existing ancestors are resolved through symlinks when checking identity. |
 | `theme` | `light`, `dark`, or omitted | Application appearance. |
 | `folderGroups` | array | `{ rootId, path }`. `path` is a unique non-empty relative path per root. |
 | `items` | array | Sync Items with unique `id` and unique destination paths. |
@@ -19,7 +19,7 @@ RepoMirror imports and exports JSON with `schemaVersion: 3`. Unknown fields are 
 | Field | Rule |
 | --- | --- |
 | `id` | Non-empty, unique string. |
-| `path` | Absolute local folder that exists when the configuration is saved. |
+| `path` | Absolute local folder path. It may be missing when imported or loaded; sync creates it. Any existing parent must be an accessible directory. |
 | `name` | Optional display label. |
 
 ## Folder Group
@@ -35,7 +35,7 @@ RepoMirror imports and exports JSON with `schemaVersion: 3`. Unknown fields are 
 | `id` | Non-empty, unique string. |
 | `sourceUrl` | A query-free `https://github.com/<owner>/<repo>` URL or a `tree/<branch>/<path>` URL. |
 | `repoUrl` | Matching `https://github.com/<owner>/<repo>.git` URL. |
-| `branch` and `sourcePath` | Both absent for a repository Source; both present and matching the `tree` URL for a directory Source. |
+| `branch` and `sourcePath` | Both absent for a repository Source; both present and matching the `tree` URL for a directory Source. A slash-named branch spans multiple URL segments. |
 | `rootId` | Must match a Root Directory `id`. |
 | `folderGroup` | Empty or an existing Folder Group path under `rootId`. |
 | `destinationName` | Single folder name. |
@@ -44,4 +44,4 @@ RepoMirror imports and exports JSON with `schemaVersion: 3`. Unknown fields are 
 | `lastSyncedAt` | RFC 3339 timestamp or `null`. |
 | `lastCommit`, `lastMessage` | String or `null`. |
 
-Relative paths cannot be absolute and cannot contain `.` or `..` path segments.
+Relative paths cannot be absolute or contain empty, `.` or `..` segments or backslashes.

@@ -10,3 +10,7 @@ export async function previewBatch<Item, Preview>(items: Item[], load: (item: It
   }
   return { successes, failures };
 }
+
+export function changedPreviews<Item, Preview extends { changes: readonly unknown[] }>(previews: Array<{ item: Item; preview: Preview }>) {
+  return previews.filter(({ preview }) => preview.changes.length > 0);
+}

@@ -936,7 +936,12 @@ fn compare_trees(
                         destination_entry,
                         &destination.join(relative),
                     )?),
-                    link_target,
+                    link_target: match (source_entry, destination_entry) {
+                        (TreeEntry::File, TreeEntry::Symlink(target)) => {
+                            Some(target.to_string_lossy().into_owned())
+                        }
+                        _ => link_target,
+                    },
                 })
             }
             _ => {}
@@ -1570,6 +1575,7 @@ mod tests {
         symlink(&outside, destination.join("entry")).unwrap();
         let changes = compare_trees(&source, &destination, true).unwrap();
         assert_eq!(changes[0].kind, "modify");
+        assert_eq!(changes[0].link_target.as_deref(), outside.to_str());
         apply_sync(&source, &destination, true).unwrap();
         assert_eq!(
             fs::read_to_string(destination.join("entry")).unwrap(),

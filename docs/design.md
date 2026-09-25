@@ -51,7 +51,7 @@ The app handles changed previews sequentially, recording each attempted item res
 
 ## Accepted limits
 
-- The URL add form interprets the segment after `tree/` as the branch by default. GitHub URLs with slash-named branches are ambiguous without repository lookup; the single-link form accepts an explicit full branch name.
+- The URL add form accepts `tree/` or `blob/` links as directory candidates and interprets the next segment as the branch by default. Preview rejects paths that resolve to files. GitHub URLs with slash-named branches are ambiguous without repository lookup; the single-link form accepts an explicit full branch name.
 - No cross-process lock covers two running app copies or external tools. The in-process mutex serializes config writes in one process.
 - Each normal save compares its expected configuration with the current file and rejects a stale caller; an explicitly confirmed import can replace an unreadable file.
 - `fs::rename` does not move folders across volumes. A cross-volume move fails without changing configuration.

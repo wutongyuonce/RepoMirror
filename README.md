@@ -14,7 +14,7 @@ It is especially useful for people building a local library of AI agent skills, 
 
 - Multiple user-selected root directories, displayed as one folder tree. A folder inside an existing root cannot be added as another root, and a new root cannot contain an existing one.
 - Expandable path-based folder groups such as `tools/browser` beneath each root directory.
-- GitHub repository and `tree/<branch>/<path>` directory links.
+- GitHub repository and `tree/<branch>/<path>` or `blob/<branch>/<path>` directory links. A path to a file is rejected during preview.
 - Batch source addition and optional custom destination names.
 - Per-item mirror mode, with a file-by-file preview before every write.
 - Manual single-item synchronization and scope-aware batch synchronization.

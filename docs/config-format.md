@@ -33,9 +33,9 @@ RepoMirror imports and exports JSON with `schemaVersion: 3`. Unknown fields are 
 | Field | Rule |
 | --- | --- |
 | `id` | Non-empty, unique string. |
-| `sourceUrl` | A query-free `https://github.com/<owner>/<repo>` URL or a `tree/<branch>/<path>` URL. |
+| `sourceUrl` | A query-free `https://github.com/<owner>/<repo>` URL or a `tree/<branch>/<path>` or `blob/<branch>/<path>` directory URL. File paths are rejected during preview. |
 | `repoUrl` | Matching `https://github.com/<owner>/<repo>.git` URL. |
-| `branch` and `sourcePath` | Both absent for a repository Source; both present and matching the `tree` URL for a directory Source. A slash-named branch spans multiple URL segments. |
+| `branch` and `sourcePath` | Both absent for a repository Source; both present and matching the `tree` or `blob` URL for a directory Source. A slash-named branch spans multiple URL segments. |
 | `rootId` | Must match a Root Directory `id`. |
 | `folderGroup` | Empty or an existing Folder Group path under `rootId`. |
 | `destinationName` | Single folder name. |

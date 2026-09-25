@@ -20,7 +20,7 @@ The user elected the recommended answer for every design branch. Dependent decis
    - **Unrecognized data:** report an error, with no configuration or filesystem change.
 3. **What does a name or location change mean?** Root, group, and Destination renames update the saved path and move an existing local folder. If the folder is absent, only the path changes. An occupied target blocks the change. The old configuration remains on failed preflight or failed move; failed config save triggers a best-effort rollback and reports any rollback failure.
 4. **What does deletion mean?** Configuration deletion is the primary operation. Local Destination deletion is optional and explicitly checked. Configuration saves first; if local deletion then fails, the app reports that configuration was removed and files may remain. Root Directories and unrelated local files are never deleted by this action.
-5. **What does sync confirmation authorize?** Exactly the displayed Source commit and file changes, including the contents of local files marked for modification or deletion. If either changes before execution, that Sync Item is rejected and needs a new preview. File/directory conflicts or symlinks within a Destination block preview and synchronization rather than deleting or following them.
+5. **What does sync confirmation authorize?** Exactly the displayed Source commit and file or symbolic-link changes, including the contents of local files and link targets marked for modification or deletion. If either changes before execution, that Sync Item is rejected and needs a new preview. File/directory conflicts or symbolic links used as Destination path components block synchronization rather than redirecting writes.
 
 ## Main scenarios
 
@@ -44,8 +44,8 @@ The user elected the recommended answer for every design branch. Dependent decis
 ### Preview and synchronize
 
 - A single item or the chosen current-folder scope is previewed before writing. The batch scope can be direct items only or recursive, with recursive as the default. An empty chosen scope reports that it has no Sync Items. Preview failure is reported per item; other items are still previewed, and the user may confirm only successfully previewed items with changes.
-- Preview reads a GitHub commit and compares ordinary files; it does not create local folders. Source symlinks outside ignored paths are unsupported and produce an error rather than being silently omitted. Confirmation checks the commit, file changes, and content fingerprints of local files that would be replaced or deleted. An expired preview fails that item and does not write it.
-- `mirror: true` removes ordinary extra files within that Destination, except ignored paths. `mirror: false` preserves extra files. Both modes preserve unlisted empty local directories and reject file/directory conflicts; neither silently removes a local directory to make room for a Source file.
+- Preview reads a GitHub commit and compares ordinary files and symbolic links; it does not create local folders. A link is shown with its stored target and copied as a link without following it. Relative, absolute, external, and dangling link targets are preserved. A selected Source directory path cannot itself contain a symbolic link. Confirmation checks the commit, changes, and fingerprints of local files or link targets that would be replaced or deleted. An expired preview fails that item and does not write it.
+- `mirror: true` removes extra ordinary files and symbolic links within that Destination, except ignored paths; it unlinks a link without touching its target. `mirror: false` preserves extra entries. Both modes preserve unlisted empty local directories and reject file/directory conflicts; neither silently removes a local directory to make room for a Source file or link. A link in a parent path never redirects writes.
 - A missing Destination is a previewed creation even when its Source has no ordinary files. Confirmed sync creates its Root Directory, Folder Group, and Destination folders. It records success or failure per item, then saves statuses. An item can have partial filesystem changes if a write fails midway; a new preview shows the remaining difference.
 - A successful preview with no changes does not enter sync, whether alone or in a batch. If no item has changes, the preview closes without another Source fetch, filesystem write, or configuration update. In a mixed batch, only changed items enter sync; unchanged items keep their recorded status and sync time. Preview failures remain visible and cannot be confirmed.
 - A failed confirmed sync retains the item's last successful sync time but displays a failure indicator and its latest error in details. A later successful sync clears that error. A preview failure is shown in the preview dialog only; it does not change the saved item status.
@@ -60,7 +60,7 @@ The user elected the recommended answer for every design branch. Dependent decis
 | M1 | Existing local folders follow rename and move; targets must be vacant. | Retain config, roll back completed moves when possible, report exceptions. |
 | D1 | Explicit optional local deletion never deletes the Root Directory itself. | Keep saved deletion; report local cleanup failure. |
 | S1 | Confirmed sync uses the previewed commit and file change list. | Reject stale preview, request a new one. |
-| S2 | Preview and sync reject Destination symlinks and file/directory conflicts. | Explain the conflicting path; leave it untouched. |
+| S2 | Preview and sync preserve symbolic links as links without following their targets; a link used as a Destination parent path and file/directory conflicts are rejected. | Show link changes, reject unsafe parent paths and conflicts before writing. |
 | S3 | Confirmation syncs only successfully previewed items with changes. | Close when none have changes; leave unchanged and failed previews untouched. |
 
 ## Concurrency, limits, and trade-offs
@@ -79,7 +79,7 @@ The user elected the recommended answer for every design branch. Dependent decis
 | M1 | Existing folder follows config; occupied target rejected; failed config write restores moved folder. |
 | D1 | Optional deletion executes after config save and reports partial cleanup. |
 | S1 | Mismatched commit or change list is rejected before applying. |
-| S2 | Non-mirror file/directory conflict and symlink escape leave local files untouched. |
+| S2 | Relative, absolute, and dangling links retain their targets; repeat preview is empty; link replacement/deletion leaves targets untouched; linked parent paths and file/directory conflicts are rejected. |
 | S3 | No-change, mixed, and directory-creation previews select only changed items for sync. |
 | Drag | External GitHub link fills the add form; existing item drag moves selected items. |
 | Add/import | First import selects a Root Directory; explicit slash-named branch leaves the correct Source path. |

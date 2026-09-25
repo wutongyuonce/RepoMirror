@@ -2,6 +2,8 @@ use chrono::Utc;
 use rfd::FileDialog;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+#[cfg(unix)]
+use std::os::unix::ffi::OsStrExt;
 use std::{
     collections::{BTreeMap, HashSet},
     ffi::OsStr,
@@ -115,6 +117,8 @@ struct PreviewChange {
     path: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     local_fingerprint: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    link_target: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -128,6 +132,11 @@ struct PreparedSource {
     _temporary_directory: TempDir,
     source: PathBuf,
     commit: String,
+}
+
+enum TreeEntry {
+    File,
+    Symlink(PathBuf),
 }
 
 #[tauri::command]
@@ -822,6 +831,26 @@ fn prepare_source(item: &SyncItem) -> Result<PreparedSource, String> {
     if !source.is_dir() {
         return Err("来源目录不存在；请检查 GitHub 链接、分支和路径。".to_owned());
     }
+    if let Some(source_path) = &item.source_path {
+        let mut current = clone_directory.clone();
+        for component in Path::new(source_path).components() {
+            current.push(component);
+            let metadata = fs::symlink_metadata(&current)
+                .map_err(|error| format!("无法检查来源目录：{error}"))?;
+            if metadata.file_type().is_symlink() {
+                return Err(format!("来源目录路径包含符号链接：{}", current.display()));
+            }
+        }
+    }
+    let source = source
+        .canonicalize()
+        .map_err(|error| format!("无法解析来源目录：{error}"))?;
+    let clone_root = clone_directory
+        .canonicalize()
+        .map_err(|error| format!("无法解析克隆目录：{error}"))?;
+    if !source.starts_with(&clone_root) {
+        return Err("来源目录通过符号链接离开了克隆目录。".to_owned());
+    }
 
     let mut revision = Command::new("git");
     revision
@@ -864,38 +893,76 @@ fn compare_trees(
     destination: &Path,
     mirror: bool,
 ) -> Result<Vec<PreviewChange>, String> {
-    let source_files = collect_files(source)?;
-    validate_destination_tree(destination, &source_files)?;
-    let destination_files = collect_files(destination)?;
+    let source_entries = collect_entries(source)?;
+    validate_destination_tree(destination, &source_entries)?;
+    let destination_entries = collect_entries(destination)?;
     let mut changes = Vec::new();
 
-    for (relative, source_file) in &source_files {
+    for (relative, source_entry) in &source_entries {
         let path = display_path(relative);
-        match destination_files.get(relative) {
+        let kind = if matches!(source_entry, TreeEntry::Symlink(_)) {
+            "add_symlink"
+        } else {
+            "add"
+        };
+        let link_target = match source_entry {
+            TreeEntry::Symlink(target) => Some(target.to_string_lossy().into_owned()),
+            TreeEntry::File => None,
+        };
+        match destination_entries.get(relative) {
             None => changes.push(PreviewChange {
-                kind: "add".to_owned(),
+                kind: kind.to_owned(),
                 path,
                 local_fingerprint: None,
+                link_target,
             }),
-            Some(destination_file) if !files_equal(source_file, destination_file)? => {
+            Some(destination_entry)
+                if !entries_equal(
+                    source_entry,
+                    destination_entry,
+                    &source.join(relative),
+                    &destination.join(relative),
+                )? =>
+            {
                 changes.push(PreviewChange {
-                    kind: "modify".to_owned(),
+                    kind: if matches!(source_entry, TreeEntry::Symlink(_)) {
+                        "modify_symlink"
+                    } else {
+                        "modify"
+                    }
+                    .to_owned(),
                     path,
-                    local_fingerprint: Some(file_fingerprint(destination_file)?),
+                    local_fingerprint: Some(entry_fingerprint(
+                        destination_entry,
+                        &destination.join(relative),
+                    )?),
+                    link_target,
                 })
             }
             _ => {}
         }
     }
     if mirror {
-        for (relative, destination_file) in destination_files
+        for (relative, destination_entry) in destination_entries
             .iter()
-            .filter(|(relative, _)| !source_files.contains_key(*relative))
+            .filter(|(relative, _)| !source_entries.contains_key(*relative))
         {
             changes.push(PreviewChange {
-                kind: "delete".to_owned(),
+                kind: if matches!(destination_entry, TreeEntry::Symlink(_)) {
+                    "delete_symlink"
+                } else {
+                    "delete"
+                }
+                .to_owned(),
                 path: display_path(relative),
-                local_fingerprint: Some(file_fingerprint(destination_file)?),
+                local_fingerprint: Some(entry_fingerprint(
+                    destination_entry,
+                    &destination.join(relative),
+                )?),
+                link_target: match destination_entry {
+                    TreeEntry::Symlink(target) => Some(target.to_string_lossy().into_owned()),
+                    TreeEntry::File => None,
+                },
             });
         }
     }
@@ -904,6 +971,7 @@ fn compare_trees(
             kind: "create_directory".to_owned(),
             path: ".".to_owned(),
             local_fingerprint: None,
+            link_target: None,
         });
     }
     changes.sort_by(|left, right| left.path.cmp(&right.path));
@@ -911,33 +979,50 @@ fn compare_trees(
 }
 
 fn apply_sync(source: &Path, destination: &Path, mirror: bool) -> Result<(), String> {
-    let source_files = collect_files(source)?;
-    validate_destination_tree(destination, &source_files)?;
+    let source_entries = collect_entries(source)?;
+    validate_destination_tree(destination, &source_entries)?;
     fs::create_dir_all(destination).map_err(|error| format!("无法创建目标目录：{error}"))?;
-    let destination_files = collect_files(destination)?;
+    let destination_entries = collect_entries(destination)?;
 
-    for (relative, source_file) in &source_files {
+    for (relative, source_entry) in &source_entries {
         let target = destination.join(relative);
         if let Some(parent) = target.parent() {
             fs::create_dir_all(parent).map_err(|error| format!("无法创建目标父目录：{error}"))?;
         }
-        let needs_copy = match destination_files.get(relative) {
-            Some(existing) => !files_equal(source_file, existing)?,
+        let needs_copy = match destination_entries.get(relative) {
+            Some(existing) => {
+                !entries_equal(source_entry, existing, &source.join(relative), &target)?
+            }
             None => true,
         };
         if needs_copy {
-            fs::copy(source_file, &target).map_err(|error| format!("无法写入目标文件：{error}"))?;
+            let replace_existing = destination_entries.get(relative).is_some_and(|existing| {
+                matches!(source_entry, TreeEntry::Symlink(_))
+                    || matches!(existing, TreeEntry::Symlink(_))
+            });
+            if replace_existing {
+                fs::remove_file(&target).map_err(|error| format!("无法替换目标文件：{error}"))?;
+            }
+            match source_entry {
+                TreeEntry::File => {
+                    fs::copy(source.join(relative), &target)
+                        .map_err(|error| format!("无法写入目标文件：{error}"))?;
+                }
+                TreeEntry::Symlink(link_target) => create_symlink(link_target, &target)?,
+            }
         }
     }
 
     if mirror {
-        for relative in destination_files
+        for relative in destination_entries
             .keys()
-            .filter(|relative| !source_files.contains_key(*relative))
+            .filter(|relative| !source_entries.contains_key(*relative))
         {
             let target = destination.join(relative);
-            if target.exists() {
-                fs::remove_file(&target).map_err(|error| format!("无法移除过期文件：{error}"))?;
+            if let Err(error) = fs::remove_file(&target) {
+                if error.kind() != io::ErrorKind::NotFound {
+                    return Err(format!("无法移除过期文件：{error}"));
+                }
             }
         }
     }
@@ -946,7 +1031,7 @@ fn apply_sync(source: &Path, destination: &Path, mirror: bool) -> Result<(), Str
 
 fn validate_destination_tree(
     source_root: &Path,
-    source_files: &BTreeMap<PathBuf, PathBuf>,
+    source_entries: &BTreeMap<PathBuf, TreeEntry>,
 ) -> Result<(), String> {
     match fs::symlink_metadata(source_root) {
         Ok(metadata) if !metadata.is_dir() || metadata.file_type().is_symlink() => {
@@ -956,35 +1041,36 @@ fn validate_destination_tree(
         Err(error) => return Err(format!("无法检查目标目录：{error}")),
         _ => {}
     }
-    for entry in WalkDir::new(source_root).follow_links(false).into_iter() {
-        let entry = entry.map_err(|error| format!("无法检查目标目录：{error}"))?;
-        if entry.file_type().is_symlink() {
-            return Err(format!("目标目录包含符号链接：{}", entry.path().display()));
-        }
-    }
-    for relative in source_files.keys() {
+    for relative in source_entries.keys() {
         let target = source_root.join(relative);
-        if target.is_dir() {
-            return Err(format!("来源文件与本地目录冲突：{}", target.display()));
+        match fs::symlink_metadata(&target) {
+            Ok(metadata) if metadata.is_dir() => {
+                return Err(format!("来源文件与本地目录冲突：{}", target.display()));
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(format!("无法检查目标路径：{error}")),
+            _ => {}
         }
-        let mut parent = target.parent();
-        while let Some(path) = parent {
-            if path == source_root {
-                break;
+        let mut parent = source_root.to_path_buf();
+        for component in relative.parent().into_iter().flat_map(Path::components) {
+            parent.push(component);
+            match fs::symlink_metadata(&parent) {
+                Ok(metadata) if !metadata.is_dir() || metadata.file_type().is_symlink() => {
+                    return Err(format!("来源目录与本地文件冲突：{}", parent.display()));
+                }
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                Err(error) => return Err(format!("无法检查目标路径：{error}")),
+                _ => {}
             }
-            if path.is_file() {
-                return Err(format!("来源目录与本地文件冲突：{}", path.display()));
-            }
-            parent = path.parent();
         }
     }
     Ok(())
 }
 
-fn collect_files(root: &Path) -> Result<BTreeMap<PathBuf, PathBuf>, String> {
-    let mut files = BTreeMap::new();
+fn collect_entries(root: &Path) -> Result<BTreeMap<PathBuf, TreeEntry>, String> {
+    let mut entries = BTreeMap::new();
     if !root.exists() {
-        return Ok(files);
+        return Ok(entries);
     }
     for entry in WalkDir::new(root)
         .follow_links(false)
@@ -992,22 +1078,59 @@ fn collect_files(root: &Path) -> Result<BTreeMap<PathBuf, PathBuf>, String> {
         .filter_entry(|entry| !should_ignore(entry.path(), root))
     {
         let entry = entry.map_err(|error| format!("无法读取目录：{error}"))?;
-        if entry.file_type().is_symlink() {
-            return Err(format!(
-                "目录包含暂不支持同步的符号链接：{}",
-                entry.path().display()
-            ));
-        }
-        if entry.file_type().is_file() {
+        if entry.file_type().is_file() || entry.file_type().is_symlink() {
             let relative = entry
                 .path()
                 .strip_prefix(root)
                 .map_err(|error| format!("无法解析来源路径：{error}"))?
                 .to_path_buf();
-            files.insert(relative, entry.into_path());
+            let value = if entry.file_type().is_symlink() {
+                TreeEntry::Symlink(fs::read_link(entry.path()).map_err(|error| {
+                    format!("无法读取符号链接 {}：{error}", entry.path().display())
+                })?)
+            } else {
+                TreeEntry::File
+            };
+            entries.insert(relative, value);
+        } else if !entry.file_type().is_dir() {
+            return Err(format!(
+                "目录包含不支持的文件类型：{}",
+                entry.path().display()
+            ));
         }
     }
-    Ok(files)
+    Ok(entries)
+}
+
+fn entries_equal(
+    source: &TreeEntry,
+    destination: &TreeEntry,
+    source_path: &Path,
+    destination_path: &Path,
+) -> Result<bool, String> {
+    match (source, destination) {
+        (TreeEntry::File, TreeEntry::File) => files_equal(source_path, destination_path),
+        (TreeEntry::Symlink(left), TreeEntry::Symlink(right)) => Ok(left == right),
+        _ => Ok(false),
+    }
+}
+
+fn entry_fingerprint(entry: &TreeEntry, path: &Path) -> Result<String, String> {
+    match entry {
+        TreeEntry::File => file_fingerprint(path),
+        TreeEntry::Symlink(target) => {
+            let mut hash = Sha256::new();
+            hash.update(b"symlink\0");
+            hash.update(target.as_os_str().as_bytes());
+            Ok(format!("{:x}", hash.finalize()))
+        }
+    }
+}
+
+#[cfg(unix)]
+fn create_symlink(link_target: &Path, destination: &Path) -> Result<(), String> {
+    std::os::unix::fs::symlink(link_target, destination)
+        .map_err(|error| format!("无法创建目标符号链接：{error}"))
 }
 
 fn should_ignore(path: &Path, root: &Path) -> bool {
@@ -1367,6 +1490,7 @@ mod tests {
                 kind: "add".to_owned(),
                 path: "a".to_owned(),
                 local_fingerprint: None,
+                link_target: None,
             }],
         };
         let mut actual = expected.clone();
@@ -1433,7 +1557,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn rejects_destination_symlink_without_writing_outside_it() {
+    fn replaces_destination_symlink_without_writing_outside_it() {
         use std::os::unix::fs::symlink;
         let temporary = tempfile::tempdir().unwrap();
         let source = temporary.path().join("source");
@@ -1444,9 +1568,32 @@ mod tests {
         fs::write(source.join("entry"), "remote").unwrap();
         fs::write(&outside, "local").unwrap();
         symlink(&outside, destination.join("entry")).unwrap();
+        let changes = compare_trees(&source, &destination, true).unwrap();
+        assert_eq!(changes[0].kind, "modify");
+        apply_sync(&source, &destination, true).unwrap();
+        assert_eq!(
+            fs::read_to_string(destination.join("entry")).unwrap(),
+            "remote"
+        );
+        assert_eq!(fs::read_to_string(outside).unwrap(), "local");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rejects_a_destination_symlink_used_as_a_parent() {
+        use std::os::unix::fs::symlink;
+        let temporary = tempfile::tempdir().unwrap();
+        let source = temporary.path().join("source");
+        let destination = temporary.path().join("destination");
+        let outside = temporary.path().join("outside");
+        fs::create_dir_all(source.join("nested")).unwrap();
+        fs::create_dir(&destination).unwrap();
+        fs::create_dir(&outside).unwrap();
+        fs::write(source.join("nested/entry"), "remote").unwrap();
+        symlink(&outside, destination.join("nested")).unwrap();
         assert!(compare_trees(&source, &destination, true).is_err());
         assert!(apply_sync(&source, &destination, true).is_err());
-        assert_eq!(fs::read_to_string(outside).unwrap(), "local");
+        assert!(!outside.join("entry").exists());
     }
 
     #[cfg(unix)]
@@ -1497,20 +1644,112 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn preview_reports_unsupported_source_symlinks() {
+    fn copies_source_symlink_itself_without_following_its_target() {
         use std::os::unix::fs::symlink;
         let temporary = tempfile::tempdir().unwrap();
         let source = temporary.path().join("source");
         let destination = temporary.path().join("destination");
         fs::create_dir(&source).unwrap();
-        fs::write(temporary.path().join("outside.txt"), "outside").unwrap();
-        symlink(
-            temporary.path().join("outside.txt"),
-            source.join("linked.txt"),
-        )
-        .unwrap();
-        assert!(compare_trees(&source, &destination, true).is_err());
-        assert!(!destination.exists());
+        fs::create_dir(source.join("demos")).unwrap();
+        fs::create_dir(source.join("workbench")).unwrap();
+        fs::write(source.join("demos/example.txt"), "inside").unwrap();
+        symlink("../demos", source.join("workbench/demosrc")).unwrap();
+        let changes = compare_trees(&source, &destination, true).unwrap();
+        assert!(changes.iter().any(|change| change.kind == "add_symlink"
+            && change.path == "workbench/demosrc"
+            && change.link_target.as_deref() == Some("../demos")));
+        apply_sync(&source, &destination, true).unwrap();
+        assert_eq!(
+            fs::read_link(destination.join("workbench/demosrc")).unwrap(),
+            Path::new("../demos")
+        );
+        assert!(compare_trees(&source, &destination, true)
+            .unwrap()
+            .is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn external_and_dangling_symlinks_are_copied_without_traversal() {
+        use std::os::unix::fs::symlink;
+        let temporary = tempfile::tempdir().unwrap();
+        let source = temporary.path().join("source");
+        let destination = temporary.path().join("destination");
+        let outside = temporary.path().join("outside");
+        fs::create_dir(&source).unwrap();
+        fs::create_dir(&outside).unwrap();
+        fs::write(outside.join("secret.txt"), "outside").unwrap();
+        symlink(&outside, source.join("external")).unwrap();
+        symlink("missing", source.join("dangling")).unwrap();
+        apply_sync(&source, &destination, false).unwrap();
+        assert_eq!(
+            fs::read_link(destination.join("external")).unwrap(),
+            outside
+        );
+        assert_eq!(
+            fs::read_link(destination.join("dangling")).unwrap(),
+            Path::new("missing")
+        );
+        assert_eq!(collect_entries(&destination).unwrap().len(), 2);
+        assert!(compare_trees(&source, &destination, false)
+            .unwrap()
+            .is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn updates_link_target_without_removing_extra_link_in_non_mirror_mode() {
+        use std::os::unix::fs::symlink;
+        let temporary = tempfile::tempdir().unwrap();
+        let source = temporary.path().join("source");
+        let destination = temporary.path().join("destination");
+        fs::create_dir(&source).unwrap();
+        fs::create_dir(&destination).unwrap();
+        symlink("new-target", source.join("link")).unwrap();
+        symlink("old-target", destination.join("link")).unwrap();
+        symlink("extra-target", destination.join("extra")).unwrap();
+        let changes = compare_trees(&source, &destination, false).unwrap();
+        assert_eq!(changes.len(), 1);
+        assert_eq!(changes[0].kind, "modify_symlink");
+        assert_eq!(changes[0].link_target.as_deref(), Some("new-target"));
+        apply_sync(&source, &destination, false).unwrap();
+        assert_eq!(
+            fs::read_link(destination.join("link")).unwrap(),
+            Path::new("new-target")
+        );
+        assert_eq!(
+            fs::read_link(destination.join("extra")).unwrap(),
+            Path::new("extra-target")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn changed_local_symlink_expires_preview_and_mirror_deletes_link_only() {
+        use std::os::unix::fs::symlink;
+        let temporary = tempfile::tempdir().unwrap();
+        let source = temporary.path().join("source");
+        let destination = temporary.path().join("destination");
+        let outside = temporary.path().join("outside.txt");
+        fs::create_dir(&source).unwrap();
+        fs::create_dir(&destination).unwrap();
+        fs::write(&outside, "outside").unwrap();
+        symlink("old", destination.join("link")).unwrap();
+        let expected = SyncPreview {
+            commit: "same".to_owned(),
+            changes: compare_trees(&source, &destination, true).unwrap(),
+        };
+        fs::remove_file(destination.join("link")).unwrap();
+        symlink(&outside, destination.join("link")).unwrap();
+        let actual = SyncPreview {
+            commit: "same".to_owned(),
+            changes: compare_trees(&source, &destination, true).unwrap(),
+        };
+        assert!(ensure_preview_matches(&expected, &actual).is_err());
+        apply_sync(&source, &destination, true).unwrap();
+        assert!(!destination.join("link").exists());
+        assert!(fs::symlink_metadata(destination.join("link")).is_err());
+        assert_eq!(fs::read_to_string(outside).unwrap(), "outside");
     }
 
     #[test]

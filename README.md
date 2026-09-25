@@ -31,7 +31,7 @@ RepoMirror uses the Mac's existing `git` executable and credentials. Private rep
 1. Click **+** beside “文件夹组” in the sidebar and select a local folder as a Root Directory. This is the local storage location, not the GitHub source. One configuration can contain multiple non-overlapping roots.
 2. Select a root or Folder Group, click “添加来源”, and paste a GitHub repository URL such as `https://github.com/owner/repo` or a directory URL such as `https://github.com/owner/repo/tree/main/packages/tool`. Enter one URL per line; a single URL may use a custom final folder name. You can also drag a GitHub URL from a browser onto a sidebar location or the current content area. **Confirming the add form saves the Sync Item; it does not download files.**
 3. Use “预览并同步” for one item or “同步当前文件夹” for the selected location. Batch scope can include only that location or its descendants (the default). Review the listed additions, modifications, deletions, and missing-directory creation. A failed item preview is shown separately. Confirmation syncs only successfully previewed items with changes; if none need syncing, close the preview.
-4. Mirror mode is enabled for new items. After confirmation it removes ordinary destination files absent from the Source. Turn off “镜像同步” in item details to retain extra local files. Both modes preserve unlisted empty directories and reject symlinks and file/directory conflicts.
+4. Mirror mode is enabled for new items. After confirmation it removes ordinary destination files and symbolic links absent from the Source. Turn off “镜像同步” in item details to retain extra local entries. Both modes preserve unlisted empty directories and reject file/directory conflicts.
 
 Each item writes to `<Root Directory>/<Folder Group>/<Destination Name>`. For example, `/Users/me/Library`, `tools/browser`, and `plugin` produce `/Users/me/Library/tools/browser/plugin`. The same GitHub Source may be added at different destinations, but two items cannot occupy one destination. Synchronization is manual; there is no scheduler or background sync.
 
@@ -53,7 +53,7 @@ An invalid or unsupported saved configuration is preserved on disk, shown as an 
 
 ## Safety
 
-Synchronizing never starts without a preview and confirmation. Confirmation rechecks the previewed commit and file changes. Mirror mode may remove extra files within a destination; disabling mirror mode preserves them. Source or destination symlinks and destination file/directory conflicts block synchronization.
+Synchronizing never starts without a preview and confirmation. Confirmation rechecks the previewed commit and file or symbolic-link changes. Links are copied as links without following their targets; mirror deletion removes only the link itself. A copied link can point outside the destination when another program opens it. A symbolic link used as a destination parent path or a file/directory conflict blocks synchronization.
 
 `.git`, `.DS_Store`, and `node_modules` are never changed by synchronization. Deleting a root directory or Folder Group recursively removes its configuration. You may separately opt in to delete the affected managed Destinations; RepoMirror never deletes the root directory itself or files outside the selected managed Destinations.
 

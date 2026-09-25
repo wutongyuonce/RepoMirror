@@ -4,7 +4,7 @@ import { flushSync } from "react-dom";
 import { api } from "./api";
 import type { DirectoryMove } from "./api";
 import { externalLinks, parseSource } from "./source";
-import { previewBatch } from "./preview-batch";
+import { changedPreviews, previewBatch } from "./preview-batch";
 import type { AppConfig, RootDirectory, SyncItem, SyncPreview } from "./domain";
 
 const EMPTY_CONFIG: AppConfig = { schemaVersion: 3, rootDirectories: [], folderGroups: [], items: [] };
@@ -188,7 +188,32 @@ export default function App() {
     } catch (cause) { setError(errorMessage(cause, "无法生成同步预览。")); }
     finally { setOperation(undefined); }
   };
-  const sync = async () => { if (!previews.length) return; flushSync(() => setOperation({ kind: "sync", current: 0, total: previews.length })); let next = config; const failures: string[] = []; for (const [index, { item, preview }] of previews.entries()) { try { const itemRoot = next.rootDirectories.find((candidate) => candidate.id === item.rootId)!; flushSync(() => setOperation({ kind: "sync", current: index + 1, total: previews.length, itemName: item.destinationName })); const updated = await api.sync(item, itemRoot.path, preview); next = { ...next, items: next.items.map((candidate) => candidate.id === updated.id ? updated : candidate) }; } catch (cause) { const message = errorMessage(cause, "同步失败。"); failures.push(`${item.destinationName}：${message}`); next = { ...next, items: next.items.map((candidate) => candidate.id === item.id ? { ...candidate, lastStatus: "failed", lastMessage: message } : candidate) }; } } try { await persist(next); setDialog(null); setPreviews([]); failures.length ? setError(failures.join("\n")) : setNotice(`已完成 ${previews.length} 项同步。`); } catch { /* persist already reported */ } setOperation(undefined); };
+  const pendingSyncs = changedPreviews(previews);
+  const sync = async () => {
+    if (!pendingSyncs.length) return setDialog(null);
+    flushSync(() => setOperation({ kind: "sync", current: 0, total: pendingSyncs.length }));
+    let next = config;
+    const failures: string[] = [];
+    for (const [index, { item, preview }] of pendingSyncs.entries()) {
+      try {
+        const itemRoot = next.rootDirectories.find((candidate) => candidate.id === item.rootId)!;
+        flushSync(() => setOperation({ kind: "sync", current: index + 1, total: pendingSyncs.length, itemName: item.destinationName }));
+        const updated = await api.sync(item, itemRoot.path, preview);
+        next = { ...next, items: next.items.map((candidate) => candidate.id === updated.id ? updated : candidate) };
+      } catch (cause) {
+        const message = errorMessage(cause, "同步失败。");
+        failures.push(`${item.destinationName}：${message}`);
+        next = { ...next, items: next.items.map((candidate) => candidate.id === item.id ? { ...candidate, lastStatus: "failed", lastMessage: message } : candidate) };
+      }
+    }
+    try {
+      await persist(next);
+      setDialog(null);
+      setPreviews([]);
+      failures.length ? setError(failures.join("\n")) : setNotice(`已完成 ${pendingSyncs.length} 项同步。`);
+    } catch { /* persist already reported */ }
+    setOperation(undefined);
+  };
   const deleteLocation = async () => {
     if (!rootId) return;
     const affected = config.items.filter((item) => item.rootId === rootId && contains(group, item.folderGroup));
@@ -377,13 +402,13 @@ export default function App() {
     {dialog === "sources" && <Modal title="添加 GitHub 来源" close={() => setDialog(null)}><p>将添加到当前选中的位置：<code>{group || root?.path}</code></p><label>GitHub 链接<textarea autoFocus rows={5} value={urls} onChange={(event) => setUrls(event.target.value)} placeholder={"每行一个链接\nhttps://github.com/owner/repo"} /></label><label>自定义最终名称 <small>仅单条链接</small><input value={customName} onChange={(event) => setCustomName(event.target.value)} /></label><label>完整分支名 <small>仅单条目录链接；分支名含 / 时填写</small><input value={branchDraft} onChange={(event) => setBranchDraft(event.target.value)} /></label><Actions close={() => setDialog(null)} submit={addSources} label="添加同步项" /></Modal>}
     {dialog === "sync-scope" && <Modal title="同步当前文件夹" close={() => setDialog(null)}><p>选择本次同步范围。</p><label className="confirm-row"><input type="radio" checked={!recursive} onChange={() => setRecursive(false)} /><span>仅当前文件夹（{config.items.filter((item) => item.rootId === rootId && item.folderGroup === group).length} 项）</span></label><label className="confirm-row"><input type="radio" checked={recursive} onChange={() => setRecursive(true)} /><span>递归当前文件夹及子文件夹（{config.items.filter((item) => item.rootId === rootId && contains(group, item.folderGroup)).length} 项）</span></label><Actions close={() => setDialog(null)} submit={() => preview(config.items.filter((item) => item.rootId === rootId && (recursive ? contains(group, item.folderGroup) : item.folderGroup === group)))} label="生成同步预览" /></Modal>}
     {dialog === "preview" && <Modal title="同步预览" close={() => setDialog(null)} wide>
-      <p>{previews.length} 项预览成功{previewFailures.length ? `，${previewFailures.length} 项失败` : ""}。确认后只同步成功预览的项目。</p>
-      {!previews.some(({ preview }) => preview.changes.length) && previews.length > 0 && <div className="preview-empty"><CircleCheck size={16} />成功预览的文件已是最新；确认后记录检查结果</div>}
-      {(previews.some(({ preview }) => preview.changes.length) || previewFailures.length > 0) && <div className="preview-list">
+      <p>{previews.length} 项预览成功（{pendingSyncs.length} 项有变更，{previews.length - pendingSyncs.length} 项已是最新）{previewFailures.length ? `，${previewFailures.length} 项失败` : ""}。{pendingSyncs.length ? "确认后只同步有变更的项目。" : previewFailures.length ? "没有可确认同步的项目。" : "无需同步。"}</p>
+      {!pendingSyncs.length && previews.length > 0 && <div className="preview-empty"><CircleCheck size={16} />成功预览的项目已是最新</div>}
+      {(pendingSyncs.length > 0 || previewFailures.length > 0) && <div className="preview-list">
         {previews.flatMap(({ item, preview }) => preview.changes.map((change) => <div key={`${item.id}-${change.path}`}><span className={`change change-${change.kind}`}>{change.kind === "add" ? "新增" : change.kind === "modify" ? "修改" : change.kind === "create_directory" ? "创建目录" : "删除"}</span><code>{itemPath(item)}{change.path === "." ? "" : `/${change.path}`}</code></div>))}
         {previewFailures.map(({ item, message }) => <div key={`failed-${item.id}`} role="alert"><span className="change change-delete">失败</span><code>{itemPath(item)}：{message}</code></div>)}
       </div>}
-      {previews.length ? <Actions close={() => setDialog(null)} submit={sync} label="确认同步成功项" /> : <div className="modal-actions"><button className="button ghost" onClick={() => setDialog(null)}>关闭</button></div>}
+      {pendingSyncs.length ? <Actions close={() => setDialog(null)} submit={sync} label="确认同步有变更项" /> : <div className="modal-actions"><button className="button primary" onClick={() => setDialog(null)}>关闭</button></div>}
     </Modal>}
     {dialog === "delete" && <Modal title={group ? "删除文件夹组" : "删除根目录"} close={() => setDialog(null)}><p>将递归删除当前范围的文件夹组和同步项配置。本地文件默认保留。</p><label className="confirm-row"><input type="checkbox" checked={deleteFiles} onChange={(event) => setDeleteFiles(event.target.checked)} /><span>同时删除其中同步项管理的本地目标文件夹（不会删除根目录或目标文件夹之外的文件）</span></label><Actions close={() => setDialog(null)} submit={deleteLocation} label={group ? "删除文件夹组" : "删除根目录"} destructive /></Modal>}
     {dialog === "delete-item" && pendingDelete && <Modal title="删除同步项" close={() => setDialog(null)}><p>将删除这条同步链接配置。本地文件夹默认保留。</p><label className="confirm-row"><input type="checkbox" checked={deleteFiles} onChange={(event) => setDeleteFiles(event.target.checked)} /><span>同时删除本地目标文件夹（{localPath(config.rootDirectories.find((candidate) => candidate.id === pendingDelete.rootId), pendingDelete)}）</span></label><Actions close={() => setDialog(null)} submit={() => removeItem(pendingDelete)} label="删除同步项" destructive /></Modal>}

@@ -18,7 +18,7 @@ Rename or drag existing item
   → atomic config replacement or reverse-order rollback
 
 Preview → Git temporary clone → destination comparison → displayed commit and changes
-Confirm → new Git clone and destination comparison → equality check → local writes → status save
+Confirm changed previews → new Git clone and destination comparison → equality check → local writes → status save
 ```
 
 ## Authority and interfaces
@@ -32,6 +32,7 @@ Confirm → new Git clone and destination comparison → equality check → loca
 | Which item or link was dropped and where | `DropRow` and `dropLinks` in `src/App.tsx`; `src/source.ts` parses external links | Root/group tree and current content area | Custom internal drag type; external URI or plain-text links. |
 | Add-link form state and navigation selection | `src/App.tsx` | Add form, first import, group navigation | UI state transitions. |
 | Previewed commit and changes | `compare_trees`, `ensure_preview_matches` | `preview_sync`, `sync_item` | Stale-preview tests. |
+| Which previews enter sync | `src/preview-batch.ts::changedPreviews` | Preview dialog and sync action in `src/App.tsx` | No-change, mixed, and missing-directory selection test. |
 | Destination path safety | `destination_path`, `validate_destination_tree` | Preview and sync | Conflict and symlink tests. |
 
 ## Configuration and filesystem ordering
@@ -46,7 +47,7 @@ The React component derives proposed next configuration and user intent. The bac
 
 Each preview or sync call owns one temporary Git clone. The preview includes a commit ID and sorted file change list. Modified or deleted local files carry SHA-256 fingerprints, so editing the same path after preview invalidates confirmation. `sync_item` clones and compares again, then rejects a mismatch before applying changes. Source symlinks are reported as unsupported. Destination symlinks or file/directory conflicts are rejected during both comparison and application. The root path is resolved against existing ancestors, allowing an absent path while keeping effective Root Directories non-overlapping.
 
-The app handles a batch sequentially, recording each item result in its final configuration save. Git is not cached between preview and execution. A Source can become unavailable between those calls, which fails only that item. Physical file copying is not transactional; the next preview is the recovery view after a partial copy.
+The app handles changed previews sequentially, recording each attempted item result in its final configuration save. Unchanged previews make no sync call and retain their saved status and time; when none have changes, the dialog closes without saving. Git is not cached between preview and execution. A Source can become unavailable between those calls, which fails only that item. Physical file copying is not transactional; the next preview is the recovery view after a partial copy.
 
 ## Accepted limits
 
@@ -66,5 +67,6 @@ The app handles a batch sequentially, recording each item result in its final co
 | D1 | Save-before-delete flow review and backend path preflight. |
 | S1 | `ensure_preview_matches` tests for commit, change list, and same-path local content drift. |
 | S2 | Rust non-mirror directory conflict and symlink tests. |
+| S3 | `src/preview-batch.test.mjs` for no-change, mixed, and missing-directory selection; frontend build for dialog and action wiring. |
 | Drag | `src/source.test.mjs` for external link parsing, UI handler audit, and frontend build; native drag behavior requires app interaction testing. |
 | Add/import and relink | UI transition review plus frontend build; no local filesystem mutation during form filling. |

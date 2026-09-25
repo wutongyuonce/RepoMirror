@@ -43,12 +43,12 @@ The user elected the recommended answer for every design branch. Dependent decis
 
 ### Preview and synchronize
 
-- A single item or the chosen current-folder scope is previewed before writing. The batch scope can be direct items only or recursive, with recursive as the default. An empty chosen scope reports that it has no Sync Items. Preview failure is reported per item; other items are still previewed, and the user may confirm only those with successful previews.
+- A single item or the chosen current-folder scope is previewed before writing. The batch scope can be direct items only or recursive, with recursive as the default. An empty chosen scope reports that it has no Sync Items. Preview failure is reported per item; other items are still previewed, and the user may confirm only successfully previewed items with changes.
 - Preview reads a GitHub commit and compares ordinary files; it does not create local folders. Source symlinks outside ignored paths are unsupported and produce an error rather than being silently omitted. Confirmation checks the commit, file changes, and content fingerprints of local files that would be replaced or deleted. An expired preview fails that item and does not write it.
 - `mirror: true` removes ordinary extra files within that Destination, except ignored paths. `mirror: false` preserves extra files. Both modes preserve unlisted empty local directories and reject file/directory conflicts; neither silently removes a local directory to make room for a Source file.
 - A missing Destination is a previewed creation even when its Source has no ordinary files. Confirmed sync creates its Root Directory, Folder Group, and Destination folders. It records success or failure per item, then saves statuses. An item can have partial filesystem changes if a write fails midway; a new preview shows the remaining difference.
-- When all files already match, the user can still confirm the preview. RepoMirror rechecks the Source and Destination and records the item as synchronized without copying files.
-- A failed item retains its last successful sync time but displays a failure indicator and its latest error in details. A later success clears that error.
+- A successful preview with no changes does not enter sync, whether alone or in a batch. If no item has changes, the preview closes without another Source fetch, filesystem write, or configuration update. In a mixed batch, only changed items enter sync; unchanged items keep their recorded status and sync time. Preview failures remain visible and cannot be confirmed.
+- A failed confirmed sync retains the item's last successful sync time but displays a failure indicator and its latest error in details. A later successful sync clears that error. A preview failure is shown in the preview dialog only; it does not change the saved item status.
 
 ## Invariants and failure semantics
 
@@ -61,11 +61,12 @@ The user elected the recommended answer for every design branch. Dependent decis
 | D1 | Explicit optional local deletion never deletes the Root Directory itself. | Keep saved deletion; report local cleanup failure. |
 | S1 | Confirmed sync uses the previewed commit and file change list. | Reject stale preview, request a new one. |
 | S2 | Preview and sync reject Destination symlinks and file/directory conflicts. | Explain the conflicting path; leave it untouched. |
+| S3 | Confirmation syncs only successfully previewed items with changes. | Close when none have changes; leave unchanged and failed previews untouched. |
 
 ## Concurrency, limits, and trade-offs
 
 - Configuration writes and rename/move transactions are serialized within one app process. Each normal save rejects a stale configuration snapshot. The app does not lock another running RepoMirror process or external filesystem tools.
-- Batch preview and sync process items sequentially. Git is invoked for each preview and again for confirmed sync; the temporary clone is released after each item.
+- Batch preview and sync process items sequentially. Git is invoked for each preview and again only for changed items confirmed for sync; the temporary clone is released after each item.
 - Move rollback is best effort for unexpected filesystem failures. Cross-volume rename is not emulated with copy-and-delete. Filesystem sync itself is not transactional; failures may leave a partially updated Destination.
 - Rechecking the preview just before writes narrows, but cannot eliminate, races with other programs editing the Destination during the write.
 - Local deletion is irreversible. The optional deletion checkbox is off by default.
@@ -79,6 +80,7 @@ The user elected the recommended answer for every design branch. Dependent decis
 | D1 | Optional deletion executes after config save and reports partial cleanup. |
 | S1 | Mismatched commit or change list is rejected before applying. |
 | S2 | Non-mirror file/directory conflict and symlink escape leave local files untouched. |
+| S3 | No-change, mixed, and directory-creation previews select only changed items for sync. |
 | Drag | External GitHub link fills the add form; existing item drag moves selected items. |
 | Add/import | First import selects a Root Directory; explicit slash-named branch leaves the correct Source path. |
 | Relink | Missing Root Directory can point at an existing folder without moving it or changing its Sync Items. |

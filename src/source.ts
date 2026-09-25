@@ -7,13 +7,14 @@ export function parseSource(url: string, rootId: string, folderGroup: string, de
   const [owner, repo, marker] = parts;
   const repository = repo.endsWith(".git") ? repo.slice(0, -4) : repo;
   if (!repository) throw new Error("仓库名称无效。");
-  if (marker && marker !== "tree") throw new Error("请使用仓库链接或 GitHub 的 tree 目录链接。");
-  if (branchOverride && marker !== "tree") throw new Error("仓库链接不需要填写分支。");
-  const branch = marker === "tree" ? branchOverride?.trim() || parts[3] : undefined;
+  const directoryLink = marker === "tree" || marker === "blob";
+  if (marker && !directoryLink) throw new Error("请使用仓库链接或 GitHub 的 tree/blob 目录链接。");
+  if (branchOverride && !directoryLink) throw new Error("仓库链接不需要填写分支。");
+  const branch = directoryLink ? branchOverride?.trim() || parts[3] : undefined;
   const branchParts = branch?.split("/") ?? [];
-  if (marker === "tree" && (!branch || branchParts.some((part) => !part || part === "." || part === "..") || parts.slice(3, 3 + branchParts.length).join("/") !== branch || parts.length <= 3 + branchParts.length)) throw new Error("目录链接的分支或路径无效；含 / 的分支请填写完整分支名。");
-  const sourcePath = marker === "tree" ? parts.slice(3 + branchParts.length).join("/") : undefined;
-  const sourceUrl = `https://github.com/${owner}/${repository}${marker === "tree" ? `/tree/${parts.slice(3).join("/")}` : ""}`;
+  if (directoryLink && (!branch || branchParts.some((part) => !part || part === "." || part === "..") || parts.slice(3, 3 + branchParts.length).join("/") !== branch || parts.length <= 3 + branchParts.length)) throw new Error("目录链接的分支或路径无效；含 / 的分支请填写完整分支名。");
+  const sourcePath = directoryLink ? parts.slice(3 + branchParts.length).join("/") : undefined;
+  const sourceUrl = `https://github.com/${owner}/${repository}${directoryLink ? `/${marker}/${parts.slice(3).join("/")}` : ""}`;
   return { id: crypto.randomUUID(), sourceUrl, repoUrl: `https://github.com/${owner}/${repository}.git`, branch, sourcePath, rootId, folderGroup, destinationName: destinationName?.trim() || sourcePath?.split("/").at(-1) || repository, mirror: true, lastStatus: "not_synced" };
 }
 

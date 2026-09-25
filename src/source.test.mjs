@@ -13,11 +13,24 @@ test("a dropped GitHub link becomes a source only after the target is chosen", (
 });
 
 test("a slash-named branch requires the explicit branch field", () => {
-  const url = "https://github.com/example/plugin/tree/feature/new-ui/packages/tool";
-  const item = parseSource(url, "root", "", undefined, "feature/new-ui");
-  assert.equal(item.branch, "feature/new-ui");
-  assert.equal(item.sourcePath, "packages/tool");
-  assert.throws(() => parseSource(url, "root", "", undefined, "missing/branch"));
+  for (const marker of ["tree", "blob"]) {
+    const url = `https://github.com/example/plugin/${marker}/feature/new-ui/packages/tool`;
+    const item = parseSource(url, "root", "", undefined, "feature/new-ui");
+    assert.equal(item.sourceUrl, url);
+    assert.equal(item.branch, "feature/new-ui");
+    assert.equal(item.sourcePath, "packages/tool");
+    assert.throws(() => parseSource(url, "root", "", undefined, "missing/branch"));
+  }
+});
+
+test("a GitHub blob URL can be saved as a directory candidate", () => {
+  const url = "https://github.com/example/plugin/blob/main/.agents/skills/tool/";
+  const item = parseSource(url, "root", "");
+  assert.equal(item.sourceUrl, url.slice(0, -1));
+  assert.equal(item.branch, "main");
+  assert.equal(item.sourcePath, ".agents/skills/tool");
+  assert.equal(item.destinationName, "tool");
+  assert.throws(() => parseSource("https://github.com/example/plugin/blob/main", "root", ""));
 });
 
 test("dragged non-GitHub and credentialed links are rejected", () => {

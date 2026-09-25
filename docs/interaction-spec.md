@@ -27,7 +27,7 @@ The user elected the recommended answer for every design branch. Dependent decis
 ### Add and import
 
 - Selecting an existing local folder adds a Root Directory. Roots have unique IDs and non-overlapping effective paths.
-- Adding or dragging one or more HTTPS GitHub repository or `tree/<branch>/<path>` links creates Sync Items after the add form is confirmed. A Source is never cloned merely by being added. The form treats one path segment after `tree/` as the branch by default; for a single link with a slash-named branch, the user supplies the full branch name so the remaining segments are the Source path.
+- Adding or dragging one or more HTTPS GitHub repository, `tree/<branch>/<path>`, or `blob/<branch>/<path>` links creates Sync Items after the add form is confirmed. A Source is never cloned merely by being added. Directory links must resolve to directories at preview; file paths fail without changing the Destination. The form treats one path segment after `tree/` or `blob/` as the branch by default; for a single link with a slash-named branch, the user supplies the full branch name so the remaining segments are the Source path.
 - Folder Group paths are relative to one Root Directory. Missing ancestors are added as Folder Groups. A Folder Group cannot occupy or sit inside a Destination.
 - Import validates the complete JSON before offering to replace an existing configuration. Missing Root Directories are valid when their existing ancestors are accessible directories. A failed or cancelled import leaves the current configuration untouched. A successful first import selects its first Root Directory.
 - A read error preserves the saved file and disables normal writes and export. An explicitly confirmed valid import can replace an unreadable file.

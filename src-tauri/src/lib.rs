@@ -662,9 +662,9 @@ fn validate_source(item: &SyncItem) -> Result<(), String> {
         .map(|parts| parts.filter(|part| !part.is_empty()).collect())
         .unwrap_or_default();
     let source_is_repo = source_parts.len() == 2;
-    let source_is_folder = source_parts.len() >= 5 && source_parts[2] == "tree";
+    let source_is_folder = source_parts.len() >= 5 && matches!(source_parts[2], "tree" | "blob");
     if !source_is_repo && !source_is_folder {
-        return Err("sourceUrl 必须是仓库链接或 tree/<branch>/<path> 目录链接。".to_owned());
+        return Err("sourceUrl 必须是仓库链接或 tree/<branch>/<path>、blob/<branch>/<path> 目录链接。".to_owned());
     }
 
     let repo_url = Url::parse(&item.repo_url).map_err(|_| "repoUrl 必须是有效 URL。".to_owned())?;
@@ -819,6 +819,9 @@ fn prepare_source(item: &SyncItem) -> Result<PreparedSource, String> {
     } else {
         clone_directory.clone()
     };
+    if source.is_file() {
+        return Err("来源链接指向文件；请选择仓库或目录。".to_owned());
+    }
     if !source.is_dir() {
         return Err("来源目录不存在；请检查 GitHub 链接、分支和路径。".to_owned());
     }
@@ -1275,15 +1278,17 @@ mod tests {
     }
 
     #[test]
-    fn accepts_an_explicit_slash_named_branch() {
+    fn accepts_an_explicit_slash_named_branch_for_directory_links() {
         let mut item = repository_item();
-        item.source_url =
-            "https://github.com/example/plugin/tree/feature/new-ui/packages/tool".to_owned();
-        item.branch = Some("feature/new-ui".to_owned());
-        item.source_path = Some("packages/tool".to_owned());
-        assert!(validate_source(&item).is_ok());
-        item.branch = Some("feature".to_owned());
-        assert!(validate_source(&item).is_err());
+        for marker in ["tree", "blob"] {
+            item.source_url =
+                format!("https://github.com/example/plugin/{marker}/feature/new-ui/packages/tool");
+            item.branch = Some("feature/new-ui".to_owned());
+            item.source_path = Some("packages/tool".to_owned());
+            assert!(validate_source(&item).is_ok());
+            item.branch = Some("feature".to_owned());
+            assert!(validate_source(&item).is_err());
+        }
     }
 
     #[cfg(unix)]

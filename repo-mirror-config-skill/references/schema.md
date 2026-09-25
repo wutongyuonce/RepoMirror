@@ -35,7 +35,7 @@ Top-level fields: `schemaVersion` must be `3`; `theme` is optional (`light` or `
 
 Every Sync Item includes `rootId`. `lastStatus` is `not_synced`, `synced`, or `failed`. The three `last*` fields may be `null`; `lastSyncedAt` otherwise uses RFC 3339.
 
-For a repository Source, use a two-segment GitHub URL and set both `branch` and `sourcePath` to `null`. For a directory Source, use `https://github.com/<owner>/<repo>/tree/<branch>/<path>` and copy `<branch>` and `<path>` exactly. If the branch name contains `/`, include all of its segments in `branch`; the remaining URL segments form `sourcePath`. `repoUrl` always uses the matching `.git` URL.
+For a repository Source, use a two-segment GitHub URL and set both `branch` and `sourcePath` to `null`. For a directory Source, use `https://github.com/<owner>/<repo>/tree/<branch>/<path>` or `https://github.com/<owner>/<repo>/blob/<branch>/<path>` and copy `<branch>` and `<path>` exactly. If the branch name contains `/`, include all of its segments in `branch`; the remaining URL segments form `sourcePath`. `repoUrl` always uses the matching `.git` URL. Preview rejects paths that resolve to files.
 
 A nested folder group path should also list its ancestors so the UI can display the full tree. A Folder Group cannot occupy or sit inside a Sync Item destination. One Root Directory cannot contain another. Root paths may be absent; validate overlap using existing canonical ancestors, and do not create directories while preparing JSON.
 

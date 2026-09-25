@@ -33,9 +33,9 @@ RepoMirror 导入和导出使用 `schemaVersion: 3` 的 JSON。未知字段会�
 | 字段 | 规则 |
 | --- | --- |
 | `id` | 非空且唯一的字符串。 |
-| `sourceUrl` | 不带查询参数的 `https://github.com/<owner>/<repo>` URL，或 `tree/<branch>/<path>` URL。 |
+| `sourceUrl` | 不带查询参数的 `https://github.com/<owner>/<repo>` URL，或 `tree/<branch>/<path>`、`blob/<branch>/<path>` 目录 URL。实际指向文件的路径会在预览时被拒绝。 |
 | `repoUrl` | 与来源匹配的 `https://github.com/<owner>/<repo>.git` URL。 |
-| `branch` 与 `sourcePath` | 仓库来源时均省略；目录来源时均须存在，并与 `tree` URL 一致。包含 `/` 的分支名占多个 URL 路径段。 |
+| `branch` 与 `sourcePath` | 仓库来源时均省略；目录来源时均须存在，并与 `tree` 或 `blob` URL 一致。包含 `/` 的分支名占多个 URL 路径段。 |
 | `rootId` | 必须对应某个根目录 `id`。 |
 | `folderGroup` | 空字符串，或同一根目录下已有文件夹组路径。 |
 | `destinationName` | 单个文件夹名称。 |
